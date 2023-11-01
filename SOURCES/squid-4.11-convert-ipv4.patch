@@ -1,0 +1,143 @@
+From 771908d313ee9c255adfb5e4fdba4d6797c18409 Mon Sep 17 00:00:00 2001
+From: Amos Jeffries <yadij@users.noreply.github.com>
+Date: Thu, 7 Mar 2019 13:50:38 +0000
+Subject: [PATCH] Bug 4928: Cannot convert non-IPv4 to IPv4 (#379)
+
+... when reaching client_ip_max_connections
+
+The client_ip_max_connections limit is checked before the TCP dst-IP is located for the newly received TCP connection. This leaves Squid unable to fetch the NFMARK or similar
+details later on (they do not exist for [::]).
+
+Move client_ip_max_connections test later in the TCP accept process to ensure dst-IP is known when the error is produced.
+---
+ src/comm/TcpAcceptor.cc | 82 ++++++++++++++++++++---------------------
+ 1 file changed, 39 insertions(+), 43 deletions(-)
+
+diff --git a/src/comm/TcpAcceptor.cc b/src/comm/TcpAcceptor.cc
+index d4b576d..936aa30 100644
+--- a/src/comm/TcpAcceptor.cc
++++ b/src/comm/TcpAcceptor.cc
+@@ -282,7 +282,16 @@ Comm::TcpAcceptor::acceptOne()
+     ConnectionPointer newConnDetails = new Connection();
+     const Comm::Flag flag = oldAccept(newConnDetails);
+ 
+-    if (flag == Comm::COMM_ERROR) {
++    /* Check for errors */
++    if (!newConnDetails->isOpen()) {
++
++        if (flag == Comm::NOMESSAGE) {
++            /* register interest again */
++            debugs(5, 5, HERE << "try later: " << conn << " handler Subscription: " << theCallSub);
++            SetSelect(conn->fd, COMM_SELECT_READ, doAccept, this, 0);
++            return;
++        }
++
+         // A non-recoverable error; notify the caller */
+         debugs(5, 5, HERE << "non-recoverable error:" << status() << " handler Subscription: " << theCallSub);
+         if (intendedForUserConnections())
+@@ -292,16 +301,12 @@ Comm::TcpAcceptor::acceptOne()
+         return;
+     }
+ 
+-    if (flag == Comm::NOMESSAGE) {
+-        /* register interest again */
+-        debugs(5, 5, "try later: " << conn << " handler Subscription: " << theCallSub);
+-    } else {
+-        debugs(5, 5, "Listener: " << conn <<
+-               " accepted new connection " << newConnDetails <<
+-               " handler Subscription: " << theCallSub);
+-        notify(flag, newConnDetails);
+-    }
++    newConnDetails->nfmark = Ip::Qos::getNfmarkFromConnection(newConnDetails, Ip::Qos::dirAccepted);
+ 
++    debugs(5, 5, HERE << "Listener: " << conn <<
++           " accepted new connection " << newConnDetails <<
++           " handler Subscription: " << theCallSub);
++    notify(flag, newConnDetails);
+     SetSelect(conn->fd, COMM_SELECT_READ, doAccept, this, 0);
+ }
+ 
+@@ -341,8 +346,8 @@ Comm::TcpAcceptor::notify(const Comm::Flag flag, const Comm::ConnectionPointer &
+  *
+  * \retval Comm::OK          success. details parameter filled.
+  * \retval Comm::NOMESSAGE   attempted accept() but nothing useful came in.
+- *                           Or this client has too many connections already.
+  * \retval Comm::COMM_ERROR  an outright failure occurred.
++ *                           Or this client has too many connections already.
+  */
+ Comm::Flag
+ Comm::TcpAcceptor::oldAccept(Comm::ConnectionPointer &details)
+@@ -383,6 +388,15 @@ Comm::TcpAcceptor::oldAccept(Comm::ConnectionPointer &details)
+ 
+     details->remote = *gai;
+ 
++    if ( Config.client_ip_max_connections >= 0) {
++        if (clientdbEstablished(details->remote, 0) > Config.client_ip_max_connections) {
++            debugs(50, DBG_IMPORTANT, "WARNING: " << details->remote << " attempting more than " << Config.client_ip_max_connections << " connections.");
++            Ip::Address::FreeAddr(gai);
++            PROF_stop(comm_accept);
++            return Comm::COMM_ERROR;
++        }
++    }
++
+     // lookup the local-end details of this new connection
+     Ip::Address::InitAddr(gai);
+     details->local.setEmpty();
+@@ -396,6 +410,23 @@ Comm::TcpAcceptor::oldAccept(Comm::ConnectionPointer &details)
+     details->local = *gai;
+     Ip::Address::FreeAddr(gai);
+ 
++    /* fdstat update */
++    fdd_table[sock].close_file = NULL;
++    fdd_table[sock].close_line = 0;
++
++    fde *F = &fd_table[sock];
++    details->remote.toStr(F->ipaddr,MAX_IPSTRLEN);
++    F->remote_port = details->remote.port();
++    F->local_addr = details->local;
++    F->sock_family = details->local.isIPv6()?AF_INET6:AF_INET;
++
++    // set socket flags
++    commSetCloseOnExec(sock);
++    commSetNonBlocking(sock);
++
++    /* IFF the socket is (tproxy) transparent, pass the flag down to allow spoofing */
++    F->flags.transparent = fd_table[conn->fd].flags.transparent; // XXX: can we remove this line yet?
++
+     // Perform NAT or TPROXY operations to retrieve the real client/dest IP addresses
+     if (conn->flags&(COMM_TRANSPARENT|COMM_INTERCEPTION) && !Ip::Interceptor.Lookup(details, conn)) {
+         debugs(50, DBG_IMPORTANT, "ERROR: NAT/TPROXY lookup failed to locate original IPs on " << details);
+@@ -414,33 +445,6 @@ Comm::TcpAcceptor::oldAccept(Comm::ConnectionPointer &details)
+     }
+ #endif
+ 
+-    details->nfmark = Ip::Qos::getNfmarkFromConnection(details, Ip::Qos::dirAccepted);
+-
+-    if (Config.client_ip_max_connections >= 0) {
+-        if (clientdbEstablished(details->remote, 0) > Config.client_ip_max_connections) {
+-            debugs(50, DBG_IMPORTANT, "WARNING: " << details->remote << " attempting more than " << Config.client_ip_max_connections << " connections.");
+-            PROF_stop(comm_accept);
+-            return Comm::NOMESSAGE;
+-        }
+-    }
+-
+-    /* fdstat update */
+-    fdd_table[sock].close_file = NULL;
+-    fdd_table[sock].close_line = 0;
+-
+-    fde *F = &fd_table[sock];
+-    details->remote.toStr(F->ipaddr,MAX_IPSTRLEN);
+-    F->remote_port = details->remote.port();
+-    F->local_addr = details->local;
+-    F->sock_family = details->local.isIPv6()?AF_INET6:AF_INET;
+-
+-    // set socket flags
+-    commSetCloseOnExec(sock);
+-    commSetNonBlocking(sock);
+-
+-    /* IFF the socket is (tproxy) transparent, pass the flag down to allow spoofing */
+-    F->flags.transparent = fd_table[conn->fd].flags.transparent; // XXX: can we remove this line yet?
+-
+     PROF_stop(comm_accept);
+     return Comm::OK;
+ }
