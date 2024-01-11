@@ -1,0 +1,156 @@
+commit c08948c8b831a2ba73c676b48aa11ba1b58cc542
+Author: Tomas Korbar <tkorbar@redhat.com>
+Date:   Thu Dec 8 11:03:08 2022 +0100
+
+    Backport adding IP_BIND_ADDRESS_NO_PORT flag to outgoing connections
+
+diff --git a/src/comm.cc b/src/comm.cc
+index 0d5f34d..6811b54 100644
+--- a/src/comm.cc
++++ b/src/comm.cc
+@@ -58,6 +58,7 @@
+  */
+ 
+ static IOCB commHalfClosedReader;
++static int comm_openex(int sock_type, int proto, Ip::Address &, int flags, const char *note);
+ static void comm_init_opened(const Comm::ConnectionPointer &conn, const char *note, struct addrinfo *AI);
+ static int comm_apply_flags(int new_socket, Ip::Address &addr, int flags, struct addrinfo *AI);
+ 
+@@ -75,6 +76,7 @@ static EVH commHalfClosedCheck;
+ static void commPlanHalfClosedCheck();
+ 
+ static Comm::Flag commBind(int s, struct addrinfo &);
++static void commSetBindAddressNoPort(int);
+ static void commSetReuseAddr(int);
+ static void commSetNoLinger(int);
+ #ifdef TCP_NODELAY
+@@ -201,6 +203,22 @@ comm_local_port(int fd)
+     return F->local_addr.port();
+ }
+ 
++/// sets the IP_BIND_ADDRESS_NO_PORT socket option to optimize ephemeral port
++/// reuse by outgoing TCP connections that must bind(2) to a source IP address
++static void
++commSetBindAddressNoPort(const int fd)
++{
++#if defined(IP_BIND_ADDRESS_NO_PORT)
++    int flag = 1;
++    if (setsockopt(fd, IPPROTO_IP, IP_BIND_ADDRESS_NO_PORT, reinterpret_cast<char*>(&flag), sizeof(flag)) < 0) {
++        const auto savedErrno = errno;
++        debugs(50, DBG_IMPORTANT, "ERROR: setsockopt(IP_BIND_ADDRESS_NO_PORT) failure: " << xstrerr(savedErrno));
++    }
++#else
++    (void)fd;
++#endif
++}
++
+ static Comm::Flag
+ commBind(int s, struct addrinfo &inaddr)
+ {
+@@ -227,6 +245,10 @@ comm_open(int sock_type,
+           int flags,
+           const char *note)
+ {
++    // assume zero-port callers do not need to know the assigned port right away
++    if (sock_type == SOCK_STREAM && addr.port() == 0 && ((flags & COMM_DOBIND) || !addr.isAnyAddr()))
++        flags |= COMM_DOBIND_PORT_LATER;
++
+     return comm_openex(sock_type, proto, addr, flags, note);
+ }
+ 
+@@ -328,7 +350,7 @@ comm_set_transparent(int fd)
+  * Create a socket. Default is blocking, stream (TCP) socket.  IO_TYPE
+  * is OR of flags specified in defines.h:COMM_*
+  */
+-int
++static int
+ comm_openex(int sock_type,
+             int proto,
+             Ip::Address &addr,
+@@ -476,6 +498,9 @@ comm_apply_flags(int new_socket,
+         if ( addr.isNoAddr() )
+             debugs(5,0,"CRITICAL: Squid is attempting to bind() port " << addr << "!!");
+ 
++        if ((flags & COMM_DOBIND_PORT_LATER))
++            commSetBindAddressNoPort(new_socket);
++
+         if (commBind(new_socket, *AI) != Comm::OK) {
+             comm_close(new_socket);
+             return -1;
+diff --git a/src/comm.h b/src/comm.h
+index c963e1c..9ff201d 100644
+--- a/src/comm.h
++++ b/src/comm.h
+@@ -43,7 +43,6 @@ void comm_import_opened(const Comm::ConnectionPointer &, const char *note, struc
+ 
+ /**
+  * Open a port specially bound for listening or sending through a specific port.
+- * This is a wrapper providing IPv4/IPv6 failover around comm_openex().
+  * Please use for all listening sockets and bind() outbound sockets.
+  *
+  * It will open a socket bound for:
+@@ -59,7 +58,6 @@ void comm_import_opened(const Comm::ConnectionPointer &, const char *note, struc
+ int comm_open_listener(int sock_type, int proto, Ip::Address &addr, int flags, const char *note);
+ void comm_open_listener(int sock_type, int proto, Comm::ConnectionPointer &conn, const char *note);
+ 
+-int comm_openex(int, int, Ip::Address &, int, const char *);
+ unsigned short comm_local_port(int fd);
+ 
+ int comm_udp_sendto(int sock, const Ip::Address &to, const void *buf, int buflen);
+diff --git a/src/comm/ConnOpener.cc b/src/comm/ConnOpener.cc
+index 25a30e4..2082214 100644
+--- a/src/comm/ConnOpener.cc
++++ b/src/comm/ConnOpener.cc
+@@ -263,7 +263,7 @@ Comm::ConnOpener::createFd()
+     if (callback_ == NULL || callback_->canceled())
+         return false;
+ 
+-    temporaryFd_ = comm_openex(SOCK_STREAM, IPPROTO_TCP, conn_->local, conn_->flags, host_);
++    temporaryFd_ = comm_open(SOCK_STREAM, IPPROTO_TCP, conn_->local, conn_->flags, host_);
+     if (temporaryFd_ < 0) {
+         sendAnswer(Comm::ERR_CONNECT, 0, "Comm::ConnOpener::createFd");
+         return false;
+diff --git a/src/comm/Connection.h b/src/comm/Connection.h
+index 4f2f23a..1e32c22 100644
+--- a/src/comm/Connection.h
++++ b/src/comm/Connection.h
+@@ -47,6 +47,8 @@ namespace Comm
+ #define COMM_DOBIND             0x08  // requires a bind()
+ #define COMM_TRANSPARENT        0x10  // arrived via TPROXY
+ #define COMM_INTERCEPTION       0x20  // arrived via NAT
++/// Internal Comm optimization: Keep the source port unassigned until connect(2)
++#define COMM_DOBIND_PORT_LATER 0x100
+ 
+ /**
+  * Store data about the physical and logical attributes of a connection.
+diff --git a/src/ipc.cc b/src/ipc.cc
+index e1d48fc..e92a27f 100644
+--- a/src/ipc.cc
++++ b/src/ipc.cc
+@@ -95,12 +95,12 @@ ipcCreate(int type, const char *prog, const char *const args[], const char *name
+     } else void(0)
+ 
+     if (type == IPC_TCP_SOCKET) {
+-        crfd = cwfd = comm_open(SOCK_STREAM,
++        crfd = cwfd = comm_open_listener(SOCK_STREAM,
+                                 0,
+                                 local_addr,
+                                 COMM_NOCLOEXEC,
+                                 name);
+-        prfd = pwfd = comm_open(SOCK_STREAM,
++        prfd = pwfd = comm_open_listener(SOCK_STREAM,
+                                 0,          /* protocol */
+                                 local_addr,
+                                 0,          /* blocking */
+diff --git a/src/tests/stub_comm.cc b/src/tests/stub_comm.cc
+index 58f85e4..5381ab2 100644
+--- a/src/tests/stub_comm.cc
++++ b/src/tests/stub_comm.cc
+@@ -46,7 +46,6 @@ int comm_open_uds(int sock_type, int proto, struct sockaddr_un* addr, int flags)
+ void comm_import_opened(const Comm::ConnectionPointer &, const char *note, struct addrinfo *AI) STUB
+ int comm_open_listener(int sock_type, int proto, Ip::Address &addr, int flags, const char *note) STUB_RETVAL(-1)
+ void comm_open_listener(int sock_type, int proto, Comm::ConnectionPointer &conn, const char *note) STUB
+-int comm_openex(int, int, Ip::Address &, int, tos_t tos, nfmark_t nfmark, const char *) STUB_RETVAL(-1)
+ unsigned short comm_local_port(int fd) STUB_RETVAL(0)
+ int comm_udp_sendto(int sock, const Ip::Address &to, const void *buf, int buflen) STUB_RETVAL(-1)
+ void commCallCloseHandlers(int fd) STUB
