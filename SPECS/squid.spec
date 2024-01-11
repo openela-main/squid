@@ -2,7 +2,7 @@
 
 Name:     squid
 Version:  4.15
-Release:  6%{?dist}
+Release:  7%{?dist}.1
 Summary:  The Squid proxy caching server
 Epoch:    7
 # See CREDITS for breakdown of non GPLv2+ code
@@ -38,6 +38,8 @@ Patch206: squid-4.11-active-ftp.patch
 Patch208: squid-4.11-convert-ipv4.patch
 # https://bugzilla.redhat.com/show_bug.cgi?id=2006121
 Patch209: squid-4.15-ftp-filename-extraction.patch
+# https://bugzilla.redhat.com/show_bug.cgi?id=2076717
+Patch210: squid-4.15-halfclosed.patch
 
 # Security fixes
 # https://bugzilla.redhat.com/show_bug.cgi?id=1941506
@@ -46,6 +48,11 @@ Patch300: squid-4.15-CVE-2021-28116.patch
 Patch301: squid-4.15-CVE-2021-46784.patch
 # https://bugzilla.redhat.com/show_bug.cgi?id=2129771
 Patch302: squid-4.15-CVE-2022-41318.patch
+# https://bugzilla.redhat.com/show_bug.cgi?id=2245910
+# +backported: https://github.com/squid-cache/squid/commit/417da4006cf5c97d44e74431b816fc58fec9e270
+Patch303: squid-4.15-CVE-2023-46846.patch
+# https://bugzilla.redhat.com/show_bug.cgi?id=2245916
+Patch304: squid-4.15-CVE-2023-46847.patch
 
 Requires: bash >= 2.0
 Requires(pre): shadow-utils
@@ -107,11 +114,14 @@ lookup program (dnsserver), a program for retrieving FTP data
 %patch206 -p1 -b .active-ftp
 %patch208 -p1 -b .convert-ipv4
 %patch209 -p1 -b .ftp-fn-extraction
+%patch210 -p1 -b .halfclosed
 
 # Security patches
 %patch300 -p1 -b .CVE-2021-28116
 %patch301 -p1 -b .CVE-2021-46784
 %patch302 -p1 -b .CVE-2022-41318
+%patch303 -p1 -b .CVE-2023-46846
+%patch304 -p1 -b .CVE-2023-46847
 
 # https://bugzilla.redhat.com/show_bug.cgi?id=1679526
 # Patch in the vendor documentation and used different location for documentation
@@ -328,6 +338,15 @@ fi
 
 
 %changelog
+* Mon Oct 30 2023 Luboš Uhliarik <luhliari@redhat.com> - 7:4.15-7.1
+- Resolves: RHEL-14801 - squid: squid: Denial of Service in HTTP Digest
+  Authentication
+- Resolves: RHEL-14776 - squid: squid: Request/Response smuggling in HTTP/1.1
+  and ICAP
+
+* Wed Aug 16 2023 Luboš Uhliarik <luhliari@redhat.com> - 7:4.15-7
+- Resolves: #2076717 - Crash with half_closed_client on
+
 * Thu Dec 08 2022 Tomas Korbar <tkorbar@redhat.com> - 4.15-6
 - Resolves: #2072988 - [RFE] Add the "IP_BIND_ADDRESS_NO_PORT"
   flag to sockets created for outgoing connections in the squid source code.
