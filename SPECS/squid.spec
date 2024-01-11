@@ -2,7 +2,7 @@
 
 Name:     squid
 Version:  5.5
-Release:  5%{?dist}
+Release:  6%{?dist}.1
 Summary:  The Squid proxy caching server
 Epoch:    7
 # See CREDITS for breakdown of non GPLv2+ code
@@ -44,12 +44,20 @@ Patch206: squid-5.0.6-openssl3.patch
 Patch207: squid-5.0.6-active-ftp.patch
 # https://bugzilla.redhat.com/show_bug.cgi?id=1988122
 Patch208: squid-5.1-test-store-cppsuite.patch
+# https://bugzilla.redhat.com/show_bug.cgi?id=2231827
+Patch209: squid-5.5-halfclosed.patch
 
 # Security patches
 # https://bugzilla.redhat.com/show_bug.cgi?id=2100721
 Patch501: squid-5.5-CVE-2021-46784.patch
 # https://bugzilla.redhat.com/show_bug.cgi?id=2129771
 Patch502: squid-5.5-CVE-2022-41318.patch
+# https://bugzilla.redhat.com/show_bug.cgi?id=2245910
+Patch503: squid-5.5-CVE-2023-46846.patch
+# https://bugzilla.redhat.com/show_bug.cgi?id=2245916
+Patch504: squid-5.5-CVE-2023-46847.patch
+# https://bugzilla.redhat.com/show_bug.cgi?id=2245919
+Patch505: squid-5.5-CVE-2023-46848.patch
 
 # cache_swap.sh
 Requires: bash gawk
@@ -123,9 +131,13 @@ lookup program (dnsserver), a program for retrieving FTP data
 %patch206 -p1 -b .openssl3
 %patch207 -p1 -b .active-ftp
 %patch208 -p1 -b .test-store-cpp
+%patch209 -p1 -b .halfclosed
 
 %patch501 -p1 -b .CVE-2021-46784
 %patch502 -p1 -b .CVE-2022-41318
+%patch503 -p1 -b .CVE-2023-46846
+%patch504 -p1 -b .CVE-2023-46847
+%patch505 -p1 -b .CVE-2023-46848
 
 # https://bugzilla.redhat.com/show_bug.cgi?id=1679526
 # Patch in the vendor documentation and used different location for documentation
@@ -352,6 +364,16 @@ fi
 
 
 %changelog
+* Mon Oct 30 2023 Luboš Uhliarik <luhliari@redhat.com> - 7:5.5-6.1
+- Resolves: RHEL-14819 - squid: squid: denial of Servicein FTP
+- Resolves: RHEL-14807 - squid: squid: Denial of Service in HTTP Digest
+  Authentication
+- Resolves: RHEL-14780 - squid: squid: Request/Response smuggling in HTTP/1.1
+  and ICAP
+
+* Wed Aug 16 2023 Luboš Uhliarik <luhliari@redhat.com> - 7:5.5-6
+- Resolves: #2231827 - Crash with half_closed_client on
+
 * Tue Dec 06 2022 Tomas Korbar <tkorbar@redhat.com> - 7:5.5-5
 - Resolves: #2151188 - [RFE] Add the "IP_BIND_ADDRESS_NO_PORT"
   flag to sockets created for outgoing connections in the squid source code.
