@@ -2,7 +2,7 @@
 
 Name:     squid
 Version:  5.5
-Release:  6%{?dist}.1
+Release:  6%{?dist}.5
 Summary:  The Squid proxy caching server
 Epoch:    7
 # See CREDITS for breakdown of non GPLv2+ code
@@ -58,6 +58,16 @@ Patch503: squid-5.5-CVE-2023-46846.patch
 Patch504: squid-5.5-CVE-2023-46847.patch
 # https://bugzilla.redhat.com/show_bug.cgi?id=2245919
 Patch505: squid-5.5-CVE-2023-46848.patch
+# https://bugzilla.redhat.com/show_bug.cgi?id=2245914
+Patch506: squid-5.5-CVE-2023-5824.patch
+# https://bugzilla.redhat.com/show_bug.cgi?id=2248521
+Patch507: squid-5.5-CVE-2023-46728.patch
+# https://bugzilla.redhat.com/show_bug.cgi?id=2247567
+Patch508: squid-5.5-CVE-2023-46724.patch
+# https://bugzilla.redhat.com/show_bug.cgi?id=2252926
+Patch509: squid-5.5-CVE-2023-49285.patch
+# https://bugzilla.redhat.com/show_bug.cgi?id=2252923
+Patch510: squid-5.5-CVE-2023-49286.patch
 
 # cache_swap.sh
 Requires: bash gawk
@@ -138,6 +148,11 @@ lookup program (dnsserver), a program for retrieving FTP data
 %patch503 -p1 -b .CVE-2023-46846
 %patch504 -p1 -b .CVE-2023-46847
 %patch505 -p1 -b .CVE-2023-46848
+%patch506 -p1 -b .CVE-2023-5824
+%patch507 -p1 -b .CVE-2023-46728
+%patch508 -p1 -b .CVE-2023-46724
+%patch509 -p1 -b .CVE-2023-49285
+%patch510 -p1 -b .CVE-2023-49286
 
 # https://bugzilla.redhat.com/show_bug.cgi?id=1679526
 # Patch in the vendor documentation and used different location for documentation
@@ -364,6 +379,24 @@ fi
 
 
 %changelog
+* Wed Dec 06 2023 Luboš Uhliarik <luhliari@redhat.com> - 7:5.5-6.5
+- Resolves: RHEL-18484 - squid: Buffer over-read in the HTTP Message processing
+  feature (CVE-2023-49285)
+- Resolves: RHEL-18486 - squid: Incorrect Check of Function Return Value In
+  Helper Process management (CVE-2023-49286)
+
+* Wed Dec 06 2023 Luboš Uhliarik <luhliari@redhat.com> - 7:5.5-6.4
+- Resolves: RHEL-16767 - squid: Denial of Service in SSL Certificate validation
+  (CVE-2023-46724)
+- Resolves: RHEL-18250 - squid crashes in assertion when a parent peer exists
+
+* Wed Dec 06 2023 Luboš Uhliarik <luhliari@redhat.com> - 7:5.5-6.3
+- Resolves: RHEL-16778 - squid: NULL pointer dereference in the gopher protocol
+  code (CVE-2023-46728)
+
+* Mon Nov 06 2023 Luboš Uhliarik <luhliari@redhat.com> - 7:5.5-6.2
+- Resolves: RHEL-14800 - squid: squid multiple issues in HTTP response caching
+
 * Mon Oct 30 2023 Luboš Uhliarik <luhliari@redhat.com> - 7:5.5-6.1
 - Resolves: RHEL-14819 - squid: squid: denial of Servicein FTP
 - Resolves: RHEL-14807 - squid: squid: Denial of Service in HTTP Digest
