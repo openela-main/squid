@@ -2,7 +2,7 @@
 
 Name:     squid
 Version:  5.5
-Release:  6%{?dist}.5
+Release:  6%{?dist}.8
 Summary:  The Squid proxy caching server
 Epoch:    7
 # See CREDITS for breakdown of non GPLv2+ code
@@ -68,6 +68,12 @@ Patch508: squid-5.5-CVE-2023-46724.patch
 Patch509: squid-5.5-CVE-2023-49285.patch
 # https://bugzilla.redhat.com/show_bug.cgi?id=2252923
 Patch510: squid-5.5-CVE-2023-49286.patch
+# https://bugzilla.redhat.com/show_bug.cgi?id=2264309
+Patch511: squid-5.5-CVE-2024-25617.patch
+# https://bugzilla.redhat.com/show_bug.cgi?id=2268366
+Patch512: squid-5.5-CVE-2024-25111.patch
+# https://bugzilla.redhat.com/show_bug.cgi?id=2254663
+Patch513: squid-5.5-CVE-2023-50269.patch
 
 # cache_swap.sh
 Requires: bash gawk
@@ -153,6 +159,9 @@ lookup program (dnsserver), a program for retrieving FTP data
 %patch508 -p1 -b .CVE-2023-46724
 %patch509 -p1 -b .CVE-2023-49285
 %patch510 -p1 -b .CVE-2023-49286
+%patch511 -p1 -b .CVE-2024-25617
+%patch512 -p1 -b .CVE-2024-25111
+%patch513 -p1 -b .CVE-2023-50269
 
 # https://bugzilla.redhat.com/show_bug.cgi?id=1679526
 # Patch in the vendor documentation and used different location for documentation
@@ -379,6 +388,18 @@ fi
 
 
 %changelog
+* Thu Mar 14 2024 Luboš Uhliarik <luhliari@redhat.com> - 7:5.5-6.8
+- Resolves: RHEL-19555 - squid: denial of service in HTTP request
+  parsing (CVE-2023-50269)
+
+* Fri Mar 08 2024 Luboš Uhliarik <luhliari@redhat.com> - 7:5.5-6.7
+- Resolves: RHEL-28614 - squid: Denial of Service in HTTP Chunked
+  Decoding (CVE-2024-25111)
+
+* Mon Feb 26 2024 Luboš Uhliarik <luhliari@redhat.com> - 7:5.5-6.6
+- Resolves: RHEL-26091 - squid: denial of service in HTTP header
+  parser (CVE-2024-25617)
+
 * Wed Dec 06 2023 Luboš Uhliarik <luhliari@redhat.com> - 7:5.5-6.5
 - Resolves: RHEL-18484 - squid: Buffer over-read in the HTTP Message processing
   feature (CVE-2023-49285)
