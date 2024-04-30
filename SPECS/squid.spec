@@ -2,7 +2,7 @@
 
 Name:     squid
 Version:  5.5
-Release:  6%{?dist}.8
+Release:  12%{?dist}
 Summary:  The Squid proxy caching server
 Epoch:    7
 # See CREDITS for breakdown of non GPLv2+ code
@@ -25,8 +25,8 @@ Source98: perl-requires-squid.sh
 # Upstream patches
 
 # Backported patches
-Patch101: squid-5.5-ip-bind-address-no-port.patch
 # https://bugzilla.redhat.com/show_bug.cgi?id=2151188
+Patch101: squid-5.5-ip-bind-address-no-port.patch
 
 # Local patches
 # Applying upstream patches first makes it less likely that local patches
@@ -58,7 +58,7 @@ Patch503: squid-5.5-CVE-2023-46846.patch
 Patch504: squid-5.5-CVE-2023-46847.patch
 # https://bugzilla.redhat.com/show_bug.cgi?id=2245919
 Patch505: squid-5.5-CVE-2023-46848.patch
-# https://bugzilla.redhat.com/show_bug.cgi?id=2245914
+# https://issues.redhat.com/browse/RHEL-14802
 Patch506: squid-5.5-CVE-2023-5824.patch
 # https://bugzilla.redhat.com/show_bug.cgi?id=2248521
 Patch507: squid-5.5-CVE-2023-46728.patch
@@ -68,12 +68,13 @@ Patch508: squid-5.5-CVE-2023-46724.patch
 Patch509: squid-5.5-CVE-2023-49285.patch
 # https://bugzilla.redhat.com/show_bug.cgi?id=2252923
 Patch510: squid-5.5-CVE-2023-49286.patch
-# https://bugzilla.redhat.com/show_bug.cgi?id=2264309
-Patch511: squid-5.5-CVE-2024-25617.patch
-# https://bugzilla.redhat.com/show_bug.cgi?id=2268366
-Patch512: squid-5.5-CVE-2024-25111.patch
 # https://bugzilla.redhat.com/show_bug.cgi?id=2254663
-Patch513: squid-5.5-CVE-2023-50269.patch
+Patch511: squid-5.5-CVE-2023-50269.patch
+# https://bugzilla.redhat.com/show_bug.cgi?id=2264309
+Patch512: squid-5.5-CVE-2024-25617.patch
+# https://bugzilla.redhat.com/show_bug.cgi?id=2268366
+Patch513: squid-5.5-CVE-2024-25111.patch
+
 
 # cache_swap.sh
 Requires: bash gawk
@@ -159,9 +160,10 @@ lookup program (dnsserver), a program for retrieving FTP data
 %patch508 -p1 -b .CVE-2023-46724
 %patch509 -p1 -b .CVE-2023-49285
 %patch510 -p1 -b .CVE-2023-49286
-%patch511 -p1 -b .CVE-2024-25617
-%patch512 -p1 -b .CVE-2024-25111
-%patch513 -p1 -b .CVE-2023-50269
+%patch511 -p1 -b .CVE-2023-50269
+%patch512 -p1 -b .CVE-2024-25617
+%patch513 -p1 -b .CVE-2024-25111
+
 
 # https://bugzilla.redhat.com/show_bug.cgi?id=1679526
 # Patch in the vendor documentation and used different location for documentation
@@ -388,41 +390,35 @@ fi
 
 
 %changelog
-* Thu Mar 14 2024 Luboš Uhliarik <luhliari@redhat.com> - 7:5.5-6.8
-- Resolves: RHEL-19555 - squid: denial of service in HTTP request
-  parsing (CVE-2023-50269)
-
-* Fri Mar 08 2024 Luboš Uhliarik <luhliari@redhat.com> - 7:5.5-6.7
-- Resolves: RHEL-28614 - squid: Denial of Service in HTTP Chunked
+* Tue Mar 19 2024 Luboš Uhliarik <luhliari@redhat.com> - 7:5.5-12
+- Resolves: RHEL-28530 - squid: Denial of Service in HTTP Chunked
   Decoding (CVE-2024-25111)
-
-* Mon Feb 26 2024 Luboš Uhliarik <luhliari@redhat.com> - 7:5.5-6.6
-- Resolves: RHEL-26091 - squid: denial of service in HTTP header
+- Resolves: RHEL-26092 - squid: denial of service in HTTP header
   parser (CVE-2024-25617)
 
-* Wed Dec 06 2023 Luboš Uhliarik <luhliari@redhat.com> - 7:5.5-6.5
-- Resolves: RHEL-18484 - squid: Buffer over-read in the HTTP Message processing
+* Fri Feb 02 2024 Luboš Uhliarik <luhliari@redhat.com> - 7:5.5-10
+- Resolves: RHEL-19556 - squid: denial of service in HTTP request
+  parsing (CVE-2023-50269)
+
+* Thu Feb 01 2024 Luboš Uhliarik <luhliari@redhat.com> - 7:5.5-9
+- Resolves: RHEL-18354 - squid: Buffer over-read in the HTTP Message processing
   feature (CVE-2023-49285)
-- Resolves: RHEL-18486 - squid: Incorrect Check of Function Return Value In
+- Resolves: RHEL-18345 - squid: Incorrect Check of Function Return Value In
   Helper Process management (CVE-2023-49286)
-
-* Wed Dec 06 2023 Luboš Uhliarik <luhliari@redhat.com> - 7:5.5-6.4
-- Resolves: RHEL-16767 - squid: Denial of Service in SSL Certificate validation
+- Resolves: RHEL-18146 - squid crashes in assertion when a parent peer exists
+- Resolves: RHEL-18231 - squid: Denial of Service in SSL Certificate validation
   (CVE-2023-46724)
-- Resolves: RHEL-18250 - squid crashes in assertion when a parent peer exists
-
-* Wed Dec 06 2023 Luboš Uhliarik <luhliari@redhat.com> - 7:5.5-6.3
-- Resolves: RHEL-16778 - squid: NULL pointer dereference in the gopher protocol
+- Resolves: RHEL-15912 - squid: NULL pointer dereference in the gopher protocol
   code (CVE-2023-46728)
 
-* Mon Nov 06 2023 Luboš Uhliarik <luhliari@redhat.com> - 7:5.5-6.2
-- Resolves: RHEL-14800 - squid: squid multiple issues in HTTP response caching
+* Tue Dec 05 2023 Tomas Korbar <tkorbar@redhat.com> - 7:5.5-8
+- Resolves: RHEL-14802 - squid: multiple issues in HTTP response caching
 
-* Mon Oct 30 2023 Luboš Uhliarik <luhliari@redhat.com> - 7:5.5-6.1
-- Resolves: RHEL-14819 - squid: squid: denial of Servicein FTP
-- Resolves: RHEL-14807 - squid: squid: Denial of Service in HTTP Digest
+* Sun Nov 12 2023 Luboš Uhliarik <luhliari@redhat.com> - 7:5.5-7
+- Resolves: RHEL-14820 - squid: squid: denial of Servicein FTP
+- Resolves: RHEL-14809 - squid: squid: Denial of Service in HTTP Digest
   Authentication
-- Resolves: RHEL-14780 - squid: squid: Request/Response smuggling in HTTP/1.1
+- Resolves: RHEL-14781 - squid: squid: Request/Response smuggling in HTTP/1.1
   and ICAP
 
 * Wed Aug 16 2023 Luboš Uhliarik <luhliari@redhat.com> - 7:5.5-6
