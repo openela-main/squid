@@ -2,7 +2,7 @@
 
 Name:     squid
 Version:  4.15
-Release:  7%{?dist}.10
+Release:  10%{?dist}
 Summary:  The Squid proxy caching server
 Epoch:    7
 # See CREDITS for breakdown of non GPLv2+ code
@@ -63,12 +63,13 @@ Patch307: squid-4.15-CVE-2023-46724.patch
 Patch308: squid-4.15-CVE-2023-49285.patch
 # https://bugzilla.redhat.com/show_bug.cgi?id=2252923
 Patch309: squid-4.15-CVE-2023-49286.patch
-# https://bugzilla.redhat.com/show_bug.cgi?id=2264309
-Patch310: squid-4.15-CVE-2024-25617.patch
-# https://bugzilla.redhat.com/show_bug.cgi?id=2268366
-Patch311: squid-4.15-CVE-2024-25111.patch
 # https://bugzilla.redhat.com/show_bug.cgi?id=2254663
-Patch312: squid-4.15-CVE-2023-50269.patch
+Patch310: squid-4.15-CVE-2023-50269.patch
+# https://bugzilla.redhat.com/show_bug.cgi?id=2264309
+Patch311: squid-4.15-CVE-2024-25617.patch
+# https://bugzilla.redhat.com/show_bug.cgi?id=2268366
+Patch312: squid-4.15-CVE-2024-25111.patch
+
 
 Requires: bash >= 2.0
 Requires(pre): shadow-utils
@@ -143,9 +144,10 @@ lookup program (dnsserver), a program for retrieving FTP data
 %patch307 -p1 -b .CVE-2023-46724
 %patch308 -p1 -b .CVE-2023-49285
 %patch309 -p1 -b .CVE-2023-49286
-%patch310 -p1 -b .CVE-2024-25617
-%patch311 -p1 -b .CVE-2024-25111
-%patch312 -p1 -b .CVE-2023-50269
+%patch310 -p1 -b .CVE-2023-50269
+%patch311 -p1 -b .CVE-2024-25617
+%patch312 -p1 -b .CVE-2024-25111
+
 
 # https://bugzilla.redhat.com/show_bug.cgi?id=1679526
 # Patch in the vendor documentation and used different location for documentation
@@ -362,43 +364,32 @@ fi
 
 
 %changelog
-* Thu Mar 14 2024 Luboš Uhliarik <luhliari@redhat.com> - 7:4.15-7.10
-- Resolves: RHEL-19551 - squid:4/squid: denial of service in HTTP request
-  parsing (CVE-2023-50269)
-
-* Fri Mar 08 2024 Luboš Uhliarik <luhliari@redhat.com> - 7:4.15-7.9
-- Resolves: RHEL-28611 - squid:4/squid: Denial of Service in HTTP Chunked
+* Tue Mar 19 2024 Luboš Uhliarik <luhliari@redhat.com> - 7:4.15-10
+- Resolves: RHEL-28529 - squid:4/squid: Denial of Service in HTTP Chunked
   Decoding (CVE-2024-25111)
-
-* Mon Feb 26 2024 Luboš Uhliarik <luhliari@redhat.com> - 7:4.15-7.6
-- Resolves: RHEL-26087 - squid:4/squid: denial of service in HTTP header
+- Resolves: RHEL-26088 - squid:4/squid: denial of service in HTTP header
   parser (CVE-2024-25617)
 
-* Thu Dec 07 2023 Luboš Uhliarik <luhliari@redhat.com> - 7:4.15-7.5
-- Resolves: RHEL-18483 - squid:4/squid: Buffer over-read in the HTTP Message
+* Fri Feb 02 2024 Luboš Uhliarik <luhliari@redhat.com> - 7:4.15-9
+- Resolves: RHEL-19552 - squid:4/squid: denial of service in HTTP request 
+  parsing (CVE-2023-50269)
+
+* Fri Feb 02 2024 Luboš Uhliarik <luhliari@redhat.com> - 7:4.15-8
+- Resolves: RHEL-18351 - squid:4/squid: Buffer over-read in the HTTP Message
   processing feature (CVE-2023-49285)
-- Resolves: RHEL-18485 - squid:4/squid: Incorrect Check of Function Return
+- Resolves: RHEL-18342 - squid:4/squid: Incorrect Check of Function Return
   Value In Helper Process management (CVE-2023-49286)
-
-* Wed Dec 06 2023 Luboš Uhliarik <luhliari@redhat.com> - 7:4.15-7.4
-- Resolves: RHEL-16764 - squid:4/squid: Denial of Service in SSL Certificate
+- Resolves: RHEL-18230 - squid:4/squid: Denial of Service in SSL Certificate
   validation (CVE-2023-46724)
-- Resolves: RHEL-16775 - squid:4/squid: NULL pointer dereference in the gopher
+- Resolves: RHEL-15911 - squid:4/squid: NULL pointer dereference in the gopher
   protocol code (CVE-2023-46728)
-- Resolves: RHEL-18257 - squid crashes in assertion when a parent peer exists
-
-* Thu Nov 30 2023 Tomas Korbar <tkorbar@redhat.com> - 7:4.15-7.3
-- Related: RHEL-14792 - squid: squid multiple issues in HTTP response caching
-- Fix mistake in the patch
-
-* Tue Nov 21 2023 Tomas Korbar <tkorbar@redhat.com> - 7:4.15-7.2
-- Resolves: RHEL-14792 - squid: squid multiple issues in HTTP response caching
-
-* Mon Oct 30 2023 Luboš Uhliarik <luhliari@redhat.com> - 7:4.15-7.1
-- Resolves: RHEL-14801 - squid: squid: Denial of Service in HTTP Digest
-  Authentication
-- Resolves: RHEL-14776 - squid: squid: Request/Response smuggling in HTTP/1.1
-  and ICAP
+- Resolves: RHEL-18251 - squid crashes in assertion when a parent peer exists
+- Resolves: RHEL-14794 - squid: squid multiple issues in HTTP response caching
+  (CVE-2023-5824)
+- Resolves: RHEL-14803 - squid: squid: Denial of Service in HTTP Digest
+  Authentication (CVE-2023-46847)
+- Resolves: RHEL-14777 - squid: squid: Request/Response smuggling in HTTP/1.1
+  and ICAP (CVE-2023-46846)
 
 * Wed Aug 16 2023 Luboš Uhliarik <luhliari@redhat.com> - 7:4.15-7
 - Resolves: #2076717 - Crash with half_closed_client on
