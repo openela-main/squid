@@ -2,7 +2,7 @@
 
 Name:     squid
 Version:  5.5
-Release:  12%{?dist}
+Release:  13%{?dist}
 Summary:  The Squid proxy caching server
 Epoch:    7
 # See CREDITS for breakdown of non GPLv2+ code
@@ -74,6 +74,10 @@ Patch511: squid-5.5-CVE-2023-50269.patch
 Patch512: squid-5.5-CVE-2024-25617.patch
 # https://bugzilla.redhat.com/show_bug.cgi?id=2268366
 Patch513: squid-5.5-CVE-2024-25111.patch
+# https://bugzilla.redhat.com/show_bug.cgi?id=2294353
+Patch514: squid-5.5-CVE-2024-37894.patch
+# https://bugzilla.redhat.com/show_bug.cgi?id=2260051
+Patch515: squid-5.5-CVE-2024-23638.patch
 
 
 # cache_swap.sh
@@ -163,6 +167,8 @@ lookup program (dnsserver), a program for retrieving FTP data
 %patch511 -p1 -b .CVE-2023-50269
 %patch512 -p1 -b .CVE-2024-25617
 %patch513 -p1 -b .CVE-2024-25111
+%patch514 -p1 -b .CVE-2024-37894
+%patch515 -p1 -b .CVE-2024-23638
 
 
 # https://bugzilla.redhat.com/show_bug.cgi?id=1679526
@@ -390,6 +396,12 @@ fi
 
 
 %changelog
+* Mon Jul 01 2024 Luboš Uhliarik <luhliari@redhat.com> - 7:5.5-13
+- Resolves: RHEL-45056 - squid: Out-of-bounds write error may lead to Denial of
+  Service (CVE-2024-37894)
+- Resolves: RHEL-45643 - squid: vulnerable to a Denial of Service attack against
+  Cache Manager error responses (CVE-2024-23638)
+
 * Tue Mar 19 2024 Luboš Uhliarik <luhliari@redhat.com> - 7:5.5-12
 - Resolves: RHEL-28530 - squid: Denial of Service in HTTP Chunked
   Decoding (CVE-2024-25111)
