@@ -2,7 +2,7 @@
 
 Name:     squid
 Version:  4.15
-Release:  10%{?dist}
+Release:  10%{?dist}.1
 Summary:  The Squid proxy caching server
 Epoch:    7
 # See CREDITS for breakdown of non GPLv2+ code
@@ -69,6 +69,9 @@ Patch310: squid-4.15-CVE-2023-50269.patch
 Patch311: squid-4.15-CVE-2024-25617.patch
 # https://bugzilla.redhat.com/show_bug.cgi?id=2268366
 Patch312: squid-4.15-CVE-2024-25111.patch
+# Regression caused by squid-4.15-CVE-2023-46846.patch
+# Upstream PR: https://github.com/squid-cache/squid/pull/1914
+Patch313: squid-4.15-ignore-wsp-after-chunk-size.patch
 
 
 Requires: bash >= 2.0
@@ -147,7 +150,7 @@ lookup program (dnsserver), a program for retrieving FTP data
 %patch310 -p1 -b .CVE-2023-50269
 %patch311 -p1 -b .CVE-2024-25617
 %patch312 -p1 -b .CVE-2024-25111
-
+%patch313 -p1 -b .ignore-wsp-chunk-sz
 
 # https://bugzilla.redhat.com/show_bug.cgi?id=1679526
 # Patch in the vendor documentation and used different location for documentation
@@ -364,6 +367,10 @@ fi
 
 
 %changelog
+* Mon Oct 14 2024 Luboš Uhliarik <luhliari@redhat.com> - 7:4.15-10.1
+- Resolves: RHEL-56024 - (Regression) Transfer-encoding:chunked data is not sent
+  to the client in its complementary
+
 * Tue Mar 19 2024 Luboš Uhliarik <luhliari@redhat.com> - 7:4.15-10
 - Resolves: RHEL-28529 - squid:4/squid: Denial of Service in HTTP Chunked
   Decoding (CVE-2024-25111)
