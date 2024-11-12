@@ -1,0 +1,113 @@
+From a0a9e6dc69d0c7b9ba237702b4c5020abc7ad1f8 Mon Sep 17 00:00:00 2001
+From: Alex Rousskov <rousskov@measurement-factory.com>
+Date: Sat, 4 Nov 2023 00:30:42 +0000
+Subject: [PATCH] Bug 5154: Do not open IPv6 sockets when IPv6 is disabled
+ (#1567)
+
+... but allow basic IPv6 manipulations like getSockAddr().
+
+    Address.cc:663 getAddrInfo() assertion failed: false
+
+Squids receives IPv6 addresses from traffic, configuration, or
+hard-coded constants even when ./configured with --disable-ipv6 or when
+IPv6 support was automatically disabled at startup after failing IPv6
+tests. To handle IPv6 correctly, such Squids must support basic IPv6
+operations like recognizing an IPv6 address in a request-target or
+reporting an unsolicited IPv6 DNS record. At least for now, such Squids
+must also correctly parse configuration-related IPv6 addresses.
+
+All those activities rely on various low-level operations like filling
+addrinfo structure with IP address information. Since 2012 commit
+c5fbbc7, Ip::Address::getAddrInfo() was failing for IPv6 addresses when
+Ip::EnableIpv6 was falsy. That change correctly recognized[^1] the need
+for such Squids to handle IPv6, but to support basic operations, we need
+to reject IPv6 addresses at a higher level and without asserting.
+
+That high-level rejection work is ongoing, but initial attempts have
+exposed difficult problems that will take time to address. For now, we
+just avoid the assertion while protecting IPv6-disabled Squid from
+listening on or opening connections to IPv6 addresses. Since Squid
+already expects (and usually correctly handles) socket opening failures,
+disabling those operations is better than failing in low-level IP
+manipulation code.
+
+The overall IPv6 posture of IPv6-disabled Squids that lack http_access
+or other rules to deny IPv6 requests will change: This fix exposes more
+of IPv6-disabled Squid code to IPv6 addresses. It is possible that such
+exposure will make some IPv6 resources inside Squid (e.g., a previously
+cached HTTP response) accessible to external requests. Squids will not
+open or accept IPv6 connections but may forward requests with raw IPv6
+targets to IPv4 cache_peers. Whether these and similar behavior changes
+are going to be permanent is open for debate, but even if they are
+temporary, they are arguably better than the corresponding assertions.
+
+These changes do not effect IPv6-enabled Squids.
+
+The assertion in IPv6-disabled Squid was reported by Joshua Rogers at
+https://megamansec.github.io/Squid-Security-Audit/ipv6-assert.html where
+it was filed as "Assertion on IPv6 Host Requests with --disable-ipv6".
+
+[^1]: https://bugs.squid-cache.org/show_bug.cgi?id=3593#c1
+---
+ src/comm.cc         | 6 ++++++
+ src/ip/Address.cc   | 2 +-
+ src/ip/Intercept.cc | 8 ++++++++
+ 3 files changed, 15 insertions(+), 1 deletion(-)
+
+diff --git a/src/comm.cc b/src/comm.cc
+index 4659955b011..271ba04d4da 100644
+--- a/src/comm.cc
++++ b/src/comm.cc
+@@ -344,6 +344,12 @@ comm_openex(int sock_type,
+     /* Create socket for accepting new connections. */
+     ++ statCounter.syscalls.sock.sockets;
+ 
++    if (!Ip::EnableIpv6 && addr.isIPv6()) {
++        debugs(50, 2, "refusing to open an IPv6 socket when IPv6 support is disabled: " << addr);
++        errno = ENOTSUP;
++        return -1;
++    }
++
+     /* Setup the socket addrinfo details for use */
+     addr.getAddrInfo(AI);
+     AI->ai_socktype = sock_type;
+diff --git a/src/ip/Address.cc b/src/ip/Address.cc
+index b6f810bfc25..ae6db37da5e 100644
+--- a/src/ip/Address.cc
++++ b/src/ip/Address.cc
+@@ -623,7 +623,7 @@ Ip::Address::getAddrInfo(struct addrinfo *&dst, int force) const
+             && dst->ai_protocol == 0)
+         dst->ai_protocol = IPPROTO_UDP;
+ 
+-    if (force == AF_INET6 || (force == AF_UNSPEC && Ip::EnableIpv6 && isIPv6()) ) {
++    if (force == AF_INET6 || (force == AF_UNSPEC && isIPv6()) ) {
+         dst->ai_addr = (struct sockaddr*)new sockaddr_in6;
+ 
+         memset(dst->ai_addr,0,sizeof(struct sockaddr_in6));
+diff --git a/src/ip/Intercept.cc b/src/ip/Intercept.cc
+index 1a5e2d15af1..a8522efaac0 100644
+--- a/src/ip/Intercept.cc
++++ b/src/ip/Intercept.cc
+@@ -15,6 +15,7 @@
+ #include "comm/Connection.h"
+ #include "fde.h"
+ #include "ip/Intercept.h"
++#include "ip/tools.h"
+ #include "src/tools.h"
+ 
+ #include <cerrno>
+@@ -430,6 +431,13 @@ Ip::Intercept::ProbeForTproxy(Ip::Address &test)
+ 
+     debugs(3, 3, "Detect TPROXY support on port " << test);
+ 
++    if (!Ip::EnableIpv6 && test.isIPv6() && !test.setIPv4()) {
++        debugs(3, DBG_CRITICAL, "Cannot use TPROXY for " << test << " because IPv6 support is disabled");
++        if (doneSuid)
++            leave_suid();
++        return false;
++    }
++
+     int tos = 1;
+     int tmp_sock = -1;
+ 
+

@@ -2,7 +2,7 @@
 
 Name:     squid
 Version:  5.5
-Release:  13%{?dist}
+Release:  14%{?dist}
 Summary:  The Squid proxy caching server
 Epoch:    7
 # See CREDITS for breakdown of non GPLv2+ code
@@ -46,6 +46,8 @@ Patch207: squid-5.0.6-active-ftp.patch
 Patch208: squid-5.1-test-store-cppsuite.patch
 # https://bugzilla.redhat.com/show_bug.cgi?id=2231827
 Patch209: squid-5.5-halfclosed.patch
+# https://issues.redhat.com/browse/RHEL-30352
+Patch210: squid-5.5-ipv6-crash.patch
 
 # Security patches
 # https://bugzilla.redhat.com/show_bug.cgi?id=2100721
@@ -78,7 +80,6 @@ Patch513: squid-5.5-CVE-2024-25111.patch
 Patch514: squid-5.5-CVE-2024-37894.patch
 # https://bugzilla.redhat.com/show_bug.cgi?id=2260051
 Patch515: squid-5.5-CVE-2024-23638.patch
-
 
 # cache_swap.sh
 Requires: bash gawk
@@ -153,6 +154,7 @@ lookup program (dnsserver), a program for retrieving FTP data
 %patch207 -p1 -b .active-ftp
 %patch208 -p1 -b .test-store-cpp
 %patch209 -p1 -b .halfclosed
+%patch210 -p1 -b .ipv6-crash
 
 %patch501 -p1 -b .CVE-2021-46784
 %patch502 -p1 -b .CVE-2022-41318
@@ -396,11 +398,15 @@ fi
 
 
 %changelog
-* Mon Jul 01 2024 Luboš Uhliarik <luhliari@redhat.com> - 7:5.5-13
-- Resolves: RHEL-45056 - squid: Out-of-bounds write error may lead to Denial of
+* Mon Jul 01 2024 Luboš Uhliarik <luhliari@redhat.com> - 7:5.5-14
+- Resolves: RHEL-45057 - squid: Out-of-bounds write error may lead to Denial of 
   Service (CVE-2024-37894)
-- Resolves: RHEL-45643 - squid: vulnerable to a Denial of Service attack against
+- Resolves: RHEL-22594 - squid: vulnerable to a Denial of Service attack against
   Cache Manager error responses (CVE-2024-23638)
+
+* Thu May 09 2024 Luboš Uhliarik <luhliari@redhat.com> - 7:5.5-13
+- Resolves: RHEL-30352 - squid v5 crashes with SIGABRT when ipv6 is disabled
+  at kernel level but it is asked to connect to an ipv6 address by a client
 
 * Tue Mar 19 2024 Luboš Uhliarik <luhliari@redhat.com> - 7:5.5-12
 - Resolves: RHEL-28530 - squid: Denial of Service in HTTP Chunked
