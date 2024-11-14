@@ -2,7 +2,7 @@
 
 Name:     squid
 Version:  4.15
-Release:  10%{?dist}.1
+Release:  10%{?dist}.3
 Summary:  The Squid proxy caching server
 Epoch:    7
 # See CREDITS for breakdown of non GPLv2+ code
@@ -72,7 +72,8 @@ Patch312: squid-4.15-CVE-2024-25111.patch
 # Regression caused by squid-4.15-CVE-2023-46846.patch
 # Upstream PR: https://github.com/squid-cache/squid/pull/1914
 Patch313: squid-4.15-ignore-wsp-after-chunk-size.patch
-
+# https://bugzilla.redhat.com/show_bug.cgi?id=2260051
+Patch314: squid-4.15-CVE-2024-23638.patch
 
 Requires: bash >= 2.0
 Requires(pre): shadow-utils
@@ -89,8 +90,6 @@ BuildRequires: openssl-devel
 BuildRequires: krb5-devel
 # time_quota requires DB
 BuildRequires: libdb-devel
-# ESI support requires Expat & libxml2
-BuildRequires: expat-devel libxml2-devel
 # TPROXY requires libcap, and also increases security somewhat
 BuildRequires: libcap-devel
 # eCAP support
@@ -151,6 +150,7 @@ lookup program (dnsserver), a program for retrieving FTP data
 %patch311 -p1 -b .CVE-2024-25617
 %patch312 -p1 -b .CVE-2024-25111
 %patch313 -p1 -b .ignore-wsp-chunk-sz
+%patch314 -p1 -b .CVE-2024-23638
 
 # https://bugzilla.redhat.com/show_bug.cgi?id=1679526
 # Patch in the vendor documentation and used different location for documentation
@@ -195,7 +195,7 @@ autoconf
    --enable-storeio="aufs,diskd,ufs,rock" \
    --enable-diskio \
    --enable-wccpv2 \
-   --enable-esi \
+   --disable-esi \
    --enable-ecap \
    --with-aio \
    --with-default-user="squid" \
@@ -367,6 +367,15 @@ fi
 
 
 %changelog
+* Wed Nov 13 2024 Luboš Uhliarik <luhliari@redhat.com> - 7:4.15-10.3
+- Resolves: RHEL-22593 - CVE-2024-23638 squid:4/squid: vulnerable to
+  a Denial of Service attack against Cache Manager error responses
+
+* Thu Nov 07 2024 Luboš Uhliarik <luhliari@redhat.com> - 7:4.15-10.2
+- Disable ESI support
+- Resolves: RHEL-65075 - CVE-2024-45802 squid:4/squid: Denial of Service
+  processing ESI response content
+
 * Mon Oct 14 2024 Luboš Uhliarik <luhliari@redhat.com> - 7:4.15-10.1
 - Resolves: RHEL-56024 - (Regression) Transfer-encoding:chunked data is not sent
   to the client in its complementary
