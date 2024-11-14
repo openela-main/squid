@@ -2,7 +2,7 @@
 
 Name:     squid
 Version:  5.5
-Release:  14%{?dist}
+Release:  14%{?dist}.3
 Summary:  The Squid proxy caching server
 Epoch:    7
 # See CREDITS for breakdown of non GPLv2+ code
@@ -48,6 +48,8 @@ Patch208: squid-5.1-test-store-cppsuite.patch
 Patch209: squid-5.5-halfclosed.patch
 # https://issues.redhat.com/browse/RHEL-30352
 Patch210: squid-5.5-ipv6-crash.patch
+# https://issues.redhat.com/browse/RHEL-12356
+Patch211: squid-5.5-large-upload-buffer-dies.patch
 
 # Security patches
 # https://bugzilla.redhat.com/show_bug.cgi?id=2100721
@@ -80,6 +82,9 @@ Patch513: squid-5.5-CVE-2024-25111.patch
 Patch514: squid-5.5-CVE-2024-37894.patch
 # https://bugzilla.redhat.com/show_bug.cgi?id=2260051
 Patch515: squid-5.5-CVE-2024-23638.patch
+# Regression caused by squid-5.5-CVE-2023-46846.patch
+# Upstream PR: https://github.com/squid-cache/squid/pull/1914
+Patch516: squid-5.5-ignore-wsp-after-chunk-size.patch
 
 # cache_swap.sh
 Requires: bash gawk
@@ -97,8 +102,6 @@ BuildRequires: openssl-devel
 BuildRequires: krb5-devel
 # time_quota requires TrivialDB
 BuildRequires: libtdb-devel
-# ESI support requires Expat & libxml2
-BuildRequires: expat-devel libxml2-devel
 # TPROXY requires libcap, and also increases security somewhat
 BuildRequires: libcap-devel
 # eCAP support
@@ -155,6 +158,7 @@ lookup program (dnsserver), a program for retrieving FTP data
 %patch208 -p1 -b .test-store-cpp
 %patch209 -p1 -b .halfclosed
 %patch210 -p1 -b .ipv6-crash
+%patch211 -p1 -b .large-upload-buffer-dies
 
 %patch501 -p1 -b .CVE-2021-46784
 %patch502 -p1 -b .CVE-2022-41318
@@ -171,6 +175,7 @@ lookup program (dnsserver), a program for retrieving FTP data
 %patch513 -p1 -b .CVE-2024-25111
 %patch514 -p1 -b .CVE-2024-37894
 %patch515 -p1 -b .CVE-2024-23638
+%patch516 -p1 -b .ignore-wsp-chunk-sz
 
 
 # https://bugzilla.redhat.com/show_bug.cgi?id=1679526
@@ -214,7 +219,7 @@ sed -i 's|@SYSCONFDIR@/squid.conf.documented|%{_pkgdocdir}/squid.conf.documented
    --enable-storeio="aufs,diskd,ufs,rock" \
    --enable-diskio \
    --enable-wccpv2 \
-   --enable-esi \
+   --disable-esi \
    --enable-ecap \
    --with-aio \
    --with-default-user="squid" \
@@ -398,6 +403,18 @@ fi
 
 
 %changelog
+* Thu Nov 07 2024 Luboš Uhliarik <luhliari@redhat.com> - 7:5.5-14.3
+- Disable ESI support
+- Resolves: RHEL-65076 - CVE-2024-45802 squid: Denial of Service processing ESI
+  response content
+
+* Wed Oct 23 2024 Luboš Uhliarik <luhliari@redhat.com> - 7:5.5-14.2
+- Resolves: RHEL-64425 TCP_MISS_ABORTED/100 erros when uploading
+
+* Mon Oct 14 2024 Luboš Uhliarik <luhliari@redhat.com> - 7:5.5-14.1
+- Resolves: RHEL-62332 - (Regression) Transfer-encoding:chunked data is not sent
+  to the client in its complementary
+
 * Mon Jul 01 2024 Luboš Uhliarik <luhliari@redhat.com> - 7:5.5-14
 - Resolves: RHEL-45057 - squid: Out-of-bounds write error may lead to Denial of 
   Service (CVE-2024-37894)
