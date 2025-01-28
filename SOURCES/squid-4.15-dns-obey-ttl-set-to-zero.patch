@@ -1,0 +1,61 @@
+diff --git a/src/ipcache.cc b/src/ipcache.cc
+index ea32021..6012f1f 100644
+--- a/src/ipcache.cc
++++ b/src/ipcache.cc
+@@ -103,6 +103,7 @@ public:
+     } flags;
+ 
+     int age() const; ///< time passed since request_time or -1 if unknown
++    void updateTtl(const unsigned int rrTtl);
+ };
+ 
+ /// \ingroup IPCacheInternal
+@@ -338,7 +339,6 @@ ipcacheParse(ipcache_entry *i, const rfc1035_rr * answers, int nr, const char *e
+     int k;
+     int j = 0;
+     int na = 0;
+-    int ttl = 0;
+     const char *name = (const char *)i->hash.key;
+     int cname_found = 0;
+ 
+@@ -436,8 +436,8 @@ ipcacheParse(ipcache_entry *i, const rfc1035_rr * answers, int nr, const char *e
+             debugs(14, 3, name << " #" << j << " " << i->addrs.in_addrs[j] );
+             ++j;
+         }
+-        if (ttl == 0 || (int) answers[k].ttl < ttl)
+-            ttl = answers[k].ttl;
++
++        i->updateTtl(answers[k].ttl);
+     }
+ 
+     assert(j == na);
+@@ -447,17 +447,21 @@ ipcacheParse(ipcache_entry *i, const rfc1035_rr * answers, int nr, const char *e
+     else
+         i->addrs.count = 255;
+ 
+-    if (ttl > Config.positiveDnsTtl)
+-        ttl = Config.positiveDnsTtl;
+-
+-    if (ttl < Config.negativeDnsTtl)
+-        ttl = Config.negativeDnsTtl;
+-
+-    i->expires = squid_curtime + ttl;
+-
+     i->flags.negcached = false;
+ }
+ 
++void
++ipcache_entry::updateTtl(const unsigned int rrTtl)
++{
++    const time_t ttl = std::min(std::max(
++                                    Config.negativeDnsTtl, // smallest value allowed
++                                    static_cast<time_t>(rrTtl)),
++                                Config.positiveDnsTtl); // largest value allowed
++    const time_t rrExpires = squid_curtime + ttl;
++    if (rrExpires < expires)
++        expires = rrExpires;
++}
++
+ /// \ingroup IPCacheInternal
+ static void
+ ipcacheHandleReply(void *data, const rfc1035_rr * answers, int na, const char *error_message)

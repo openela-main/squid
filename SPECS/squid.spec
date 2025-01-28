@@ -2,7 +2,7 @@
 
 Name:     squid
 Version:  4.15
-Release:  10%{?dist}.3
+Release:  10%{?dist}.5
 Summary:  The Squid proxy caching server
 Epoch:    7
 # See CREDITS for breakdown of non GPLv2+ code
@@ -40,6 +40,8 @@ Patch208: squid-4.11-convert-ipv4.patch
 Patch209: squid-4.15-ftp-filename-extraction.patch
 # https://bugzilla.redhat.com/show_bug.cgi?id=2076717
 Patch210: squid-4.15-halfclosed.patch
+# https://issues.redhat.com/browse/RHEL-66120
+Patch211: squid-4.15-dns-obey-ttl-set-to-zero.patch
 
 # Security fixes
 # https://bugzilla.redhat.com/show_bug.cgi?id=1941506
@@ -106,7 +108,7 @@ BuildRequires: systemd-devel
 
 %description
 Squid is a high-performance proxy caching server for Web clients,
-supporting FTP, gopher, and HTTP data objects. Unlike traditional
+supporting FTP and HTTP data objects. Unlike traditional
 caching software, Squid handles all requests in a single,
 non-blocking, I/O-driven process. Squid keeps meta data and especially
 hot objects cached in RAM, caches DNS lookups, supports non-blocking
@@ -134,6 +136,7 @@ lookup program (dnsserver), a program for retrieving FTP data
 %patch208 -p1 -b .convert-ipv4
 %patch209 -p1 -b .ftp-fn-extraction
 %patch210 -p1 -b .halfclosed
+%patch211 -p1 -b .dns-obey-ttl-set-to-zero
 
 # Security patches
 %patch300 -p1 -b .CVE-2021-28116
@@ -367,6 +370,12 @@ fi
 
 
 %changelog
+* Fri Nov 22 2024 Luboš Uhliarik <luhliari@redhat.com> - 7:4.15-10.5
+- Resolves: RHEL-66120 - squid caches DNS entries despite having TTL set to 0
+
+* Mon Nov 18 2024 Luboš Uhliarik <luhliari@redhat.com> - 7:4.15-10.4
+- Resolves: RHEL-67870 - Remove gopher mention from spec file
+
 * Wed Nov 13 2024 Luboš Uhliarik <luhliari@redhat.com> - 7:4.15-10.3
 - Resolves: RHEL-22593 - CVE-2024-23638 squid:4/squid: vulnerable to
   a Denial of Service attack against Cache Manager error responses
