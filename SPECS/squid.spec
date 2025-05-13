@@ -2,7 +2,7 @@
 
 Name:     squid
 Version:  5.5
-Release:  14%{?dist}.3
+Release:  18%{?dist}
 Summary:  The Squid proxy caching server
 Epoch:    7
 # See CREDITS for breakdown of non GPLv2+ code
@@ -128,7 +128,7 @@ Conflicts: NetworkManager < 1.20
 
 %description
 Squid is a high-performance proxy caching server for Web clients,
-supporting FTP, gopher, and HTTP data objects. Unlike traditional
+supporting FTP and HTTP data objects. Unlike traditional
 caching software, Squid handles all requests in a single,
 non-blocking, I/O-driven process. Squid keeps meta data and especially
 hot objects cached in RAM, caches DNS lookups, supports non-blocking
@@ -403,16 +403,19 @@ fi
 
 
 %changelog
-* Thu Nov 07 2024 Luboš Uhliarik <luhliari@redhat.com> - 7:5.5-14.3
+* Mon Nov 18 2024 Luboš Uhliarik <luhliari@redhat.com> - 7:5.5-18
+- Resolves: RHEL-67869 - Remove gopher mention from spec file
+
+* Thu Nov 14 2024 Luboš Uhliarik <luhliari@redhat.com> - 7:5.5-17
 - Disable ESI support
-- Resolves: RHEL-65076 - CVE-2024-45802 squid: Denial of Service processing ESI
-  response content
+- Resolves: RHEL-65080 - CVE-2024-45802 squid: Denial of Service processing
+  ESI response content
 
-* Wed Oct 23 2024 Luboš Uhliarik <luhliari@redhat.com> - 7:5.5-14.2
-- Resolves: RHEL-64425 TCP_MISS_ABORTED/100 erros when uploading
+* Tue Oct 22 2024 Luboš Uhliarik <luhliari@redhat.com> - 7:5.5-16
+- Resolves: RHEL-12356 - TCP_MISS_ABORTED/100 erros when uploading
 
-* Mon Oct 14 2024 Luboš Uhliarik <luhliari@redhat.com> - 7:5.5-14.1
-- Resolves: RHEL-62332 - (Regression) Transfer-encoding:chunked data is not sent
+* Mon Oct 14 2024 Luboš Uhliarik <luhliari@redhat.com> - 7:5.5-15
+- Resolves: RHEL-62324 - (Regression) Transfer-encoding:chunked data is not sent
   to the client in its complementary
 
 * Mon Jul 01 2024 Luboš Uhliarik <luhliari@redhat.com> - 7:5.5-14
