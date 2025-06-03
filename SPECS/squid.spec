@@ -2,7 +2,7 @@
 
 Name:     squid
 Version:  4.15
-Release:  10%{?dist}.5
+Release:  10%{?dist}.6
 Summary:  The Squid proxy caching server
 Epoch:    7
 # See CREDITS for breakdown of non GPLv2+ code
@@ -42,6 +42,8 @@ Patch209: squid-4.15-ftp-filename-extraction.patch
 Patch210: squid-4.15-halfclosed.patch
 # https://issues.redhat.com/browse/RHEL-66120
 Patch211: squid-4.15-dns-obey-ttl-set-to-zero.patch
+# https://issues.redhat.com/browse/RHEL-57030
+Patch212: squid-4.15-fatal-read-data-from-mem.patch
 
 # Security fixes
 # https://bugzilla.redhat.com/show_bug.cgi?id=1941506
@@ -154,6 +156,9 @@ lookup program (dnsserver), a program for retrieving FTP data
 %patch312 -p1 -b .CVE-2024-25111
 %patch313 -p1 -b .ignore-wsp-chunk-sz
 %patch314 -p1 -b .CVE-2024-23638
+
+# patch305 follow-up
+%patch212 -p1 -b .fatal-read-data-from-mem
 
 # https://bugzilla.redhat.com/show_bug.cgi?id=1679526
 # Patch in the vendor documentation and used different location for documentation
@@ -370,6 +375,10 @@ fi
 
 
 %changelog
+* Wed Mar 26 2025 Luboš Uhliarik <luhliari@redhat.com> - 7:4.15-10.6
+- Resolves: RHEL-84420 - A squid child process causes a memory reference error
+  and the squid service terminates abnormally
+
 * Fri Nov 22 2024 Luboš Uhliarik <luhliari@redhat.com> - 7:4.15-10.5
 - Resolves: RHEL-66120 - squid caches DNS entries despite having TTL set to 0
 

@@ -1,0 +1,48 @@
+From 6c29ec591b1c777fc9a66f810f0ce5bc5076bc40 Mon Sep 17 00:00:00 2001
+From: Alex Rousskov <rousskov@measurement-factory.com>
+Date: Tue, 14 Nov 2023 18:40:37 +0000
+Subject: [PATCH] Bug 5317: FATAL attempt to read data from memory (#1579)
+
+    FATAL: Squid has attempted to read data ... that is not present.
+
+Recent commit 122a6e3 attempted to deliver in-memory response body bytes
+to a Store-reading client that requested (at least) response headers.
+That optimization relied on the old canReadFromMemory() logic, but that
+logic results in false positives when the checked read offset falls into
+a gap between stored headers and the first body byte of a Content-Range.
+In that case, a false positive leads to a readFromMemory() call and a
+FATAL mem_hdr::copy() error.
+
+This workaround disables the above optimization without fixing
+canReadFromMemory(). We believe that a readFromMemory() call that comes
+right after response headers are delivered to the Store-reading client
+will not suffer from the same problem because the client will supply the
+read offset of the first body byte, eliminating the false positive.
+---
+ src/store_client.cc | 6 ++++--
+ 1 file changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/src/store_client.cc b/src/store_client.cc
+index a5f2440..b09f78a 100644
+--- a/src/store_client.cc
++++ b/src/store_client.cc
+@@ -355,8 +355,9 @@ store_client::doCopy(StoreEntry *anEntry)
+             return; // failure
+     }
+ 
+-    // send any immediately available body bytes even if we also sendHttpHeaders
+-    if (canReadFromMemory()) {
++    // Send any immediately available body bytes unless we sendHttpHeaders.
++    // TODO: Send those body bytes when we sendHttpHeaders as well.
++    if (!sendHttpHeaders && canReadFromMemory()) {
+         readFromMemory();
+         noteNews(); // will sendHttpHeaders (if needed) as well
+         flags.store_copying = false;
+@@ -442,6 +443,7 @@ store_client::canReadFromMemory() const
+ {
+     const auto &mem = entry->mem();
+     const auto memReadOffset = nextHttpReadOffset();
++    // XXX: This (lo <= offset < end) logic does not support Content-Range gaps.
+     return mem.inmem_lo <= memReadOffset && memReadOffset < mem.endOffset() &&
+            parsingBuffer.first.spaceSize();
+ }
