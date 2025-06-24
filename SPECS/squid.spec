@@ -2,7 +2,7 @@
 
 Name:     squid
 Version:  5.5
-Release:  18%{?dist}
+Release:  19%{?dist}
 Summary:  The Squid proxy caching server
 Epoch:    7
 # See CREDITS for breakdown of non GPLv2+ code
@@ -50,6 +50,8 @@ Patch209: squid-5.5-halfclosed.patch
 Patch210: squid-5.5-ipv6-crash.patch
 # https://issues.redhat.com/browse/RHEL-12356
 Patch211: squid-5.5-large-upload-buffer-dies.patch
+# https://issues.redhat.com/browse/RHEL-57030
+Patch212: squid-5.5-fatal-read-data-from-mem.patch
 
 # Security patches
 # https://bugzilla.redhat.com/show_bug.cgi?id=2100721
@@ -177,6 +179,8 @@ lookup program (dnsserver), a program for retrieving FTP data
 %patch515 -p1 -b .CVE-2024-23638
 %patch516 -p1 -b .ignore-wsp-chunk-sz
 
+# patch506 follow-up
+%patch212 -p1 -b .fatal-read-data-from-mem
 
 # https://bugzilla.redhat.com/show_bug.cgi?id=1679526
 # Patch in the vendor documentation and used different location for documentation
@@ -403,6 +407,9 @@ fi
 
 
 %changelog
+* Wed Mar 26 2025 Luboš Uhliarik <luhliari@redhat.com> - 7:5.5-19
+- Resolves: RHEL-84694 - squid aborts trying to access memory
+
 * Mon Nov 18 2024 Luboš Uhliarik <luhliari@redhat.com> - 7:5.5-18
 - Resolves: RHEL-67869 - Remove gopher mention from spec file
 
