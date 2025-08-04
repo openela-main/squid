@@ -2,7 +2,7 @@
 
 Name:     squid
 Version:  5.5
-Release:  19%{?dist}
+Release:  19%{?dist}.1
 Summary:  The Squid proxy caching server
 Epoch:    7
 # See CREDITS for breakdown of non GPLv2+ code
@@ -52,6 +52,8 @@ Patch210: squid-5.5-ipv6-crash.patch
 Patch211: squid-5.5-large-upload-buffer-dies.patch
 # https://issues.redhat.com/browse/RHEL-57030
 Patch212: squid-5.5-fatal-read-data-from-mem.patch
+# https://issues.redhat.com/browse/RHEL-50261
+Patch213: squid-5.5-store-client-leak-fix.patch
 
 # Security patches
 # https://bugzilla.redhat.com/show_bug.cgi?id=2100721
@@ -181,6 +183,8 @@ lookup program (dnsserver), a program for retrieving FTP data
 
 # patch506 follow-up
 %patch212 -p1 -b .fatal-read-data-from-mem
+
+%patch213 -p1 -b .store-client-mem-leak
 
 # https://bugzilla.redhat.com/show_bug.cgi?id=1679526
 # Patch in the vendor documentation and used different location for documentation
@@ -407,6 +411,9 @@ fi
 
 
 %changelog
+* Mon Jul 21 2025 Luboš Uhliarik <luhliari@redhat.com> - 7:5.5-19.1
+- Resolves: RHEL-104154 - Squid memory usage increases until OOM.
+
 * Wed Mar 26 2025 Luboš Uhliarik <luhliari@redhat.com> - 7:5.5-19
 - Resolves: RHEL-84694 - squid aborts trying to access memory
 
