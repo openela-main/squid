@@ -2,7 +2,7 @@
 
 Name:     squid
 Version:  4.15
-Release:  10%{?dist}.6
+Release:  10%{?dist}.9
 Summary:  The Squid proxy caching server
 Epoch:    7
 # See CREDITS for breakdown of non GPLv2+ code
@@ -78,6 +78,8 @@ Patch312: squid-4.15-CVE-2024-25111.patch
 Patch313: squid-4.15-ignore-wsp-after-chunk-size.patch
 # https://bugzilla.redhat.com/show_bug.cgi?id=2260051
 Patch314: squid-4.15-CVE-2024-23638.patch
+# https://bugzilla.redhat.com/show_bug.cgi?id=2404736
+Patch315: squid-4.15-CVE-2025-62168.patch
 
 Requires: bash >= 2.0
 Requires(pre): shadow-utils
@@ -156,6 +158,7 @@ lookup program (dnsserver), a program for retrieving FTP data
 %patch312 -p1 -b .CVE-2024-25111
 %patch313 -p1 -b .ignore-wsp-chunk-sz
 %patch314 -p1 -b .CVE-2024-23638
+%patch315 -p1 -b .CVE-2025-62168
 
 # patch305 follow-up
 %patch212 -p1 -b .fatal-read-data-from-mem
@@ -375,6 +378,10 @@ fi
 
 
 %changelog
+* Mon Oct 20 2025 Luboš Uhliarik <luhliari@redhat.com> - 7:4.15-10.9
+- Resolves: RHEL-122484 - squid: Squid vulnerable to information disclosure via
+  authentication credential leakage in error handling (CVE-2025-62168)
+
 * Wed Mar 26 2025 Luboš Uhliarik <luhliari@redhat.com> - 7:4.15-10.6
 - Resolves: RHEL-84420 - A squid child process causes a memory reference error
   and the squid service terminates abnormally
