@@ -2,7 +2,7 @@
 
 Name:     squid
 Version:  5.5
-Release:  19%{?dist}.1
+Release:  21%{?dist}
 Summary:  The Squid proxy caching server
 Epoch:    7
 # See CREDITS for breakdown of non GPLv2+ code
@@ -52,8 +52,10 @@ Patch210: squid-5.5-ipv6-crash.patch
 Patch211: squid-5.5-large-upload-buffer-dies.patch
 # https://issues.redhat.com/browse/RHEL-57030
 Patch212: squid-5.5-fatal-read-data-from-mem.patch
+# https://issues.redhat.com/browse/RHEL-77282
+Patch213: squid-5.5-cache-peer-connect-errors.patch
 # https://issues.redhat.com/browse/RHEL-50261
-Patch213: squid-5.5-store-client-leak-fix.patch
+Patch214: squid-5.5-store-client-leak-fix.patch
 
 # Security patches
 # https://bugzilla.redhat.com/show_bug.cgi?id=2100721
@@ -163,6 +165,7 @@ lookup program (dnsserver), a program for retrieving FTP data
 %patch209 -p1 -b .halfclosed
 %patch210 -p1 -b .ipv6-crash
 %patch211 -p1 -b .large-upload-buffer-dies
+%patch213 -p1 -b .cache-peer-connect-errors
 
 %patch501 -p1 -b .CVE-2021-46784
 %patch502 -p1 -b .CVE-2022-41318
@@ -184,7 +187,7 @@ lookup program (dnsserver), a program for retrieving FTP data
 # patch506 follow-up
 %patch212 -p1 -b .fatal-read-data-from-mem
 
-%patch213 -p1 -b .store-client-mem-leak
+%patch214 -p1 -b .store-client-mem-leak
 
 # https://bugzilla.redhat.com/show_bug.cgi?id=1679526
 # Patch in the vendor documentation and used different location for documentation
@@ -411,11 +414,15 @@ fi
 
 
 %changelog
-* Mon Jul 21 2025 Luboš Uhliarik <luhliari@redhat.com> - 7:5.5-19.1
-- Resolves: RHEL-104154 - Squid memory usage increases until OOM.
+* Wed Jul 16 2025 Luboš Uhliarik <luhliari@redhat.com> - 7:5.5-21
+- Resolves: RHEL-50261 - Squid memory usage increases until OOM.
+
+* Thu Apr 10 2025 Luboš Uhliarik <luhliari@redhat.com> - 7:5.5-20
+- Resolves: RHEL-77282 - ”TCP connection to XX.XX.XX.XX/XXXX failed” message is
+  output frequently on RHEL9
 
 * Wed Mar 26 2025 Luboš Uhliarik <luhliari@redhat.com> - 7:5.5-19
-- Resolves: RHEL-84694 - squid aborts trying to access memory
+- Resolves: RHEL-57030 - squid aborts trying to access memory
 
 * Mon Nov 18 2024 Luboš Uhliarik <luhliari@redhat.com> - 7:5.5-18
 - Resolves: RHEL-67869 - Remove gopher mention from spec file

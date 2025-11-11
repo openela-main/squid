@@ -1,0 +1,426 @@
+diff --git a/src/CachePeer.cc b/src/CachePeer.cc
+index e6f4b0d..2a43cb4 100644
+--- a/src/CachePeer.cc
++++ b/src/CachePeer.cc
+@@ -10,6 +10,7 @@
+ #include "acl/Gadgets.h"
+ #include "CachePeer.h"
+ #include "defines.h"
++#include "neighbors.h"
+ #include "NeighborTypeDomainList.h"
+ #include "pconn.h"
+ #include "PeerPoolMgr.h"
+@@ -46,3 +47,43 @@ CachePeer::~CachePeer()
+     xfree(domain);
+ }
+ 
++void
++CachePeer::noteSuccess()
++{
++    if (!tcp_up) {
++        debugs(15, 2, "connection to " << this->host << "/" << this->http_port << " succeeded");
++        tcp_up = connect_fail_limit; // NP: so peerAlive() works properly.
++        peerAlive(this);
++    } else {
++        tcp_up = connect_fail_limit;
++    }
++}
++
++// TODO: Require callers to detail failures instead of using one (and often
++// misleading!) "connection failed" phrase for all of them.
++/// noteFailure() helper for handling failures attributed to this peer
++void
++CachePeer::noteFailure()
++{
++    stats.last_connect_failure = squid_curtime;
++    if (tcp_up > 0)
++        --tcp_up;
++
++    const auto consideredAliveByAdmin = (stats.logged_state == PEER_ALIVE);
++    const auto level = consideredAliveByAdmin ? DBG_IMPORTANT : 2;
++    debugs(15, level, "ERROR: Connection to " << this->host << "/" << this->http_port << " failed");
++
++    if (consideredAliveByAdmin) {
++        if (!tcp_up) {
++            debugs(15, DBG_IMPORTANT, "Detected DEAD " << neighborTypeStr(this) << ": " << name);
++            stats.logged_state = PEER_DEAD;
++        } else {
++            debugs(15, 2, "additional failures needed to mark this cache_peer DEAD: " << tcp_up);
++        }
++    } else {
++        assert(!tcp_up);
++        debugs(15, 2, "cache_peer " << this->host << "/" << this->http_port << " is still DEAD");
++    }
++}
++
++
+diff --git a/src/CachePeer.h b/src/CachePeer.h
+index edeb048..be753b9 100644
+--- a/src/CachePeer.h
++++ b/src/CachePeer.h
+@@ -12,6 +12,7 @@
+ #include "acl/forward.h"
+ #include "base/CbcPointer.h"
+ #include "enums.h"
++#include "http/StatusCode.h"
+ #include "icp_opcode.h"
+ #include "ip/Address.h"
+ #include "security/PeerOptions.h"
+@@ -32,6 +33,12 @@ public:
+     CachePeer() = default;
+     ~CachePeer();
+ 
++    /// reacts to a successful establishment of a connection to this cache_peer
++    void noteSuccess();
++
++    /// reacts to a failed attempt to establish a connection to this cache_peer
++    void noteFailure();
++
+     u_int index = 0;
+     char *name = nullptr;
+     char *host = nullptr;
+@@ -190,7 +197,28 @@ public:
+ 
+     int front_end_https = 0; ///< 0 - off, 1 - on, 2 - auto
+     int connection_auth = 2; ///< 0 - off, 1 - on, 2 - auto
++
++private:
++    void countFailure();
+ };
+ 
++/// reacts to a successful establishment of a connection to an origin server or cache_peer
++/// \param peer nil if Squid established a connection to an origin server
++inline void
++NoteOutgoingConnectionSuccess(CachePeer * const peer)
++{
++    if (peer)
++        peer->noteSuccess();
++}
++
++/// reacts to a failed attempt to establish a connection to an origin server or cache_peer
++/// \param peer nil if the connection is to an origin server
++inline void
++NoteOutgoingConnectionFailure(CachePeer * const peer)
++{
++    if (peer)
++        peer->noteFailure();
++}
++
+ #endif /* SQUID_CACHEPEER_H_ */
+ 
+diff --git a/src/FwdState.cc b/src/FwdState.cc
+index c089f82..254b4d5 100644
+--- a/src/FwdState.cc
++++ b/src/FwdState.cc
+@@ -1083,8 +1083,7 @@ FwdState::successfullyConnectedToPeer(const Comm::ConnectionPointer &conn)
+     CallJobHere1(17, 4, request->clientConnectionManager, ConnStateData,
+                  ConnStateData::notePeerConnection, serverConnection());
+ 
+-    if (serverConnection()->getPeer())
+-        peerConnectSucceded(serverConnection()->getPeer());
++    NoteOutgoingConnectionSuccess(serverConnection()->getPeer());
+ 
+     dispatch();
+ }
+diff --git a/src/FwdState.h b/src/FwdState.h
+index 0bcfafd..dea29d5 100644
+--- a/src/FwdState.h
++++ b/src/FwdState.h
+@@ -30,7 +30,6 @@
+ 
+ class AccessLogEntry;
+ typedef RefCount<AccessLogEntry> AccessLogEntryPointer;
+-class ErrorState;
+ class HttpRequest;
+ class PconnPool;
+ class ResolvedPeers;
+diff --git a/src/HappyConnOpener.cc b/src/HappyConnOpener.cc
+index 6d83ff1..009e3f7 100644
+--- a/src/HappyConnOpener.cc
++++ b/src/HappyConnOpener.cc
+@@ -617,8 +617,6 @@ HappyConnOpener::handleConnOpenerAnswer(Attempt &attempt, const CommConnectCbPar
+     }
+ 
+     debugs(17, 8, what << " failed: " << params.conn);
+-    if (const auto peer = params.conn->getPeer())
+-        peerConnectFailed(peer);
+ 
+     // remember the last failure (we forward it if we cannot connect anywhere)
+     lastFailedConnection = handledPath;
+@@ -627,6 +625,8 @@ HappyConnOpener::handleConnOpenerAnswer(Attempt &attempt, const CommConnectCbPar
+     lastError = makeError(ERR_CONNECT_FAIL);
+     lastError->xerrno = params.xerrno;
+ 
++    NoteOutgoingConnectionFailure(params.conn->getPeer());
++
+     if (spareWaiting)
+         updateSpareWaitAfterPrimeFailure();
+ 
+diff --git a/src/PeerPoolMgr.cc b/src/PeerPoolMgr.cc
+index 7423dd6..bd73cb5 100644
+--- a/src/PeerPoolMgr.cc
++++ b/src/PeerPoolMgr.cc
+@@ -99,7 +99,7 @@ PeerPoolMgr::handleOpenedConnection(const CommConnectCbParams &params)
+     }
+ 
+     if (params.flag != Comm::OK) {
+-        peerConnectFailed(peer);
++        NoteOutgoingConnectionFailure(peer);
+         checkpoint("conn opening failure"); // may retry
+         return;
+     }
+@@ -148,7 +148,7 @@ PeerPoolMgr::handleSecuredPeer(Security::EncryptorAnswer &answer)
+     assert(!answer.tunneled);
+     if (answer.error.get()) {
+         assert(!answer.conn);
+-        // PeerConnector calls peerConnectFailed() for us;
++        // PeerConnector calls NoteOutgoingConnectionFailure() for us
+         checkpoint("conn securing failure"); // may retry
+         return;
+     }
+diff --git a/src/clients/HttpTunneler.cc b/src/clients/HttpTunneler.cc
+index 67a52e6..84c090a 100644
+--- a/src/clients/HttpTunneler.cc
++++ b/src/clients/HttpTunneler.cc
+@@ -389,8 +389,9 @@ void
+ Http::Tunneler::countFailingConnection()
+ {
+     assert(connection);
+-    if (const auto p = connection->getPeer())
+-        peerConnectFailed(p);
++    // No NoteOutgoingConnectionFailure(connection->getPeer()) call here because
++    // we do not blame cache_peer for CONNECT failures (on top of a successfully
++    // established connection to that cache_peer).
+     if (noteFwdPconnUse && connection->isOpen())
+         fwdPconnPool->noteUses(fd_table[connection->fd].pconn.uses);
+ }
+diff --git a/src/error/forward.h b/src/error/forward.h
+index c105a66..478aac0 100644
+--- a/src/error/forward.h
++++ b/src/error/forward.h
+@@ -90,6 +90,7 @@ typedef enum {
+ 
+ class Error;
+ class ErrorDetail;
++class ErrorState;
+ 
+ typedef RefCount<ErrorDetail> ErrorDetailPointer;
+ 
+diff --git a/src/http/StatusCode.h b/src/http/StatusCode.h
+index d9f3620..c093017 100644
+--- a/src/http/StatusCode.h
++++ b/src/http/StatusCode.h
+@@ -90,6 +90,8 @@ typedef enum {
+ const char *StatusCodeString(const Http::StatusCode status);
+ /// whether this is an informational 1xx response status code
+ inline bool Is1xx(const int sc) { return scContinue <= sc && sc < scOkay; }
++/// whether this is a client error 4xx response status code
++inline bool Is4xx(const int sc) { return scBadRequest <= sc && sc < scInternalServerError; }
+ /// whether this response status code prohibits sending Content-Length
+ inline bool ProhibitsContentLength(const StatusCode sc) { return sc == scNoContent || Is1xx(sc); }
+ 
+diff --git a/src/neighbors.cc b/src/neighbors.cc
+index a68d53d..b36b1d0 100644
+--- a/src/neighbors.cc
++++ b/src/neighbors.cc
+@@ -452,9 +452,6 @@ peerClearRR()
+     }
+ }
+ 
+-/**
+- * Perform all actions when a CachePeer is detected revived.
+- */
+ void
+ peerAlive(CachePeer *p)
+ {
+@@ -468,6 +465,10 @@ peerAlive(CachePeer *p)
+ 
+     p->stats.last_reply = squid_curtime;
+     p->stats.probe_start = 0;
++
++    // TODO: Remove or explain how we could detect an alive peer without IP addresses
++    if (!p->n_addresses)
++        ipcache_nbgethostbyname(p->host, peerDNSConfigure, p);
+ }
+ 
+ CachePeer *
+@@ -1275,45 +1276,6 @@ peerRefreshDNS(void *data)
+     eventAddIsh("peerRefreshDNS", peerRefreshDNS, NULL, 3600.0, 1);
+ }
+ 
+-static void
+-peerConnectFailedSilent(CachePeer * p)
+-{
+-    p->stats.last_connect_failure = squid_curtime;
+-
+-    if (!p->tcp_up) {
+-        debugs(15, 2, "TCP connection to " << p->host << "/" << p->http_port <<
+-               " dead");
+-        return;
+-    }
+-
+-    -- p->tcp_up;
+-
+-    if (!p->tcp_up) {
+-        debugs(15, DBG_IMPORTANT, "Detected DEAD " << neighborTypeStr(p) << ": " << p->name);
+-        p->stats.logged_state = PEER_DEAD;
+-    }
+-}
+-
+-void
+-peerConnectFailed(CachePeer *p)
+-{
+-    debugs(15, DBG_IMPORTANT, "TCP connection to " << p->host << "/" << p->http_port << " failed");
+-    peerConnectFailedSilent(p);
+-}
+-
+-void
+-peerConnectSucceded(CachePeer * p)
+-{
+-    if (!p->tcp_up) {
+-        debugs(15, 2, "TCP connection to " << p->host << "/" << p->http_port << " succeeded");
+-        p->tcp_up = p->connect_fail_limit; // NP: so peerAlive(p) works properly.
+-        peerAlive(p);
+-        if (!p->n_addresses)
+-            ipcache_nbgethostbyname(p->host, peerDNSConfigure, p);
+-    } else
+-        p->tcp_up = p->connect_fail_limit;
+-}
+-
+ /// whether new TCP probes are currently banned
+ static bool
+ peerProbeIsBusy(const CachePeer *p)
+@@ -1365,11 +1327,10 @@ peerProbeConnectDone(const Comm::ConnectionPointer &conn, Comm::Flag status, int
+ {
+     CachePeer *p = (CachePeer*)data;
+ 
+-    if (status == Comm::OK) {
+-        peerConnectSucceded(p);
+-    } else {
+-        peerConnectFailedSilent(p);
+-    }
++    if (status == Comm::OK)
++        p->noteSuccess();
++    else
++        p->noteFailure();
+ 
+     -- p->testing_now;
+     conn->close();
+diff --git a/src/neighbors.h b/src/neighbors.h
+index 95f0928..870943d 100644
+--- a/src/neighbors.h
++++ b/src/neighbors.h
+@@ -49,6 +49,12 @@ CachePeer *getRoundRobinParent(PeerSelector*);
+ CachePeer *getWeightedRoundRobinParent(PeerSelector*);
+ void peerClearRRStart(void);
+ void peerClearRR(void);
++
++// TODO: Move, together with its many dependencies and callers, into CachePeer.
++/// Updates protocol-agnostic CachePeer state after an indication of a
++/// successful contact with the given cache_peer.
++void peerAlive(CachePeer *);
++
+ lookup_t peerDigestLookup(CachePeer * p, PeerSelector *);
+ CachePeer *neighborsDigestSelect(PeerSelector *);
+ void peerNoteDigestLookup(HttpRequest * request, CachePeer * p, lookup_t lookup);
+@@ -56,8 +62,6 @@ void peerNoteDigestGone(CachePeer * p);
+ int neighborUp(const CachePeer * e);
+ const char *neighborTypeStr(const CachePeer * e);
+ peer_t neighborType(const CachePeer *, const AnyP::Uri &);
+-void peerConnectFailed(CachePeer *);
+-void peerConnectSucceded(CachePeer *);
+ void dump_peer_options(StoreEntry *, CachePeer *);
+ int peerHTTPOkay(const CachePeer *, PeerSelector *);
+ 
+diff --git a/src/security/BlindPeerConnector.cc b/src/security/BlindPeerConnector.cc
+index d0d1c4a..8c12843 100644
+--- a/src/security/BlindPeerConnector.cc
++++ b/src/security/BlindPeerConnector.cc
+@@ -70,13 +70,13 @@ Security::BlindPeerConnector::noteNegotiationDone(ErrorState *error)
+ 
+     if (error) {
+         debugs(83, 5, "error=" << (void*)error);
+-        // XXX: forward.cc calls peerConnectSucceeded() after an OK TCP connect but
+-        // we call peerConnectFailed() if SSL failed afterwards. Is that OK?
+-        // It is not clear whether we should call peerConnectSucceeded/Failed()
++        // XXX: FwdState calls NoteOutgoingConnectionSuccess() after an OK TCP connect, but
++        // we call noteFailure() if SSL failed afterwards. Is that OK?
++        // It is not clear whether we should call noteSuccess()/noteFailure()/etc.
+         // based on TCP results, SSL results, or both. And the code is probably not
+         // consistent in this aspect across tunnelling and forwarding modules.
+         if (peer && peer->secure.encryptTransport)
+-            peerConnectFailed(peer);
++            peer->noteFailure();
+         return;
+     }
+ 
+diff --git a/src/security/BlindPeerConnector.h b/src/security/BlindPeerConnector.h
+index 37e2fc5..3553859 100644
+--- a/src/security/BlindPeerConnector.h
++++ b/src/security/BlindPeerConnector.h
+@@ -42,8 +42,8 @@ public:
+     /// Return the configured TLS context object
+     virtual Security::ContextPointer getTlsContext();
+ 
+-    /// On error calls peerConnectFailed().
+-    /// On success store the used TLS session for later use.
++    /// On success, stores the used TLS session for later use.
++    /// On error, informs the peer.
+     virtual void noteNegotiationDone(ErrorState *);
+ };
+ 
+diff --git a/src/security/PeerConnector.cc b/src/security/PeerConnector.cc
+index 494edab..0b179bb 100644
+--- a/src/security/PeerConnector.cc
++++ b/src/security/PeerConnector.cc
+@@ -10,6 +10,7 @@
+ 
+ #include "squid.h"
+ #include "acl/FilledChecklist.h"
++#include "CachePeer.h"
+ #include "comm/Loops.h"
+ #include "comm/Read.h"
+ #include "Downloader.h"
+@@ -92,15 +93,17 @@ Security::PeerConnector::commCloseHandler(const CommCloseCbParams &params)
+     debugs(83, 5, "FD " << params.fd << ", Security::PeerConnector=" << params.data);
+ 
+     closeHandler = nullptr;
++
++    const auto err = new ErrorState(ERR_SECURE_CONNECT_FAIL, Http::scServiceUnavailable, request.getRaw(), al);
++    static const auto d = MakeNamedErrorDetail("TLS_CONNECT_CLOSE");
++    err->detailError(d);
++
+     if (serverConn) {
+         countFailingConnection();
+         serverConn->noteClosure();
+         serverConn = nullptr;
+     }
+ 
+-    const auto err = new ErrorState(ERR_SECURE_CONNECT_FAIL, Http::scServiceUnavailable, request.getRaw(), al);
+-    static const auto d = MakeNamedErrorDetail("TLS_CONNECT_CLOSE");
+-    err->detailError(d);
+     bail(err);
+ }
+ 
+@@ -510,8 +513,7 @@ void
+ Security::PeerConnector::countFailingConnection()
+ {
+     assert(serverConn);
+-    if (const auto p = serverConn->getPeer())
+-        peerConnectFailed(p);
++    NoteOutgoingConnectionFailure(serverConn->getPeer());
+     // TODO: Calling PconnPool::noteUses() should not be our responsibility.
+     if (noteFwdPconnUse && serverConn->isOpen())
+         fwdPconnPool->noteUses(fd_table[serverConn->fd].pconn.uses);
+diff --git a/src/security/PeerConnector.h b/src/security/PeerConnector.h
+index 10700d7..a913b25 100644
+--- a/src/security/PeerConnector.h
++++ b/src/security/PeerConnector.h
+@@ -24,7 +24,6 @@
+ #include <iosfwd>
+ #include <queue>
+ 
+-class ErrorState;
+ class Downloader;
+ class AccessLogEntry;
+ typedef RefCount<AccessLogEntry> AccessLogEntryPointer;
