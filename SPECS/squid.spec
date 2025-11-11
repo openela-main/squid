@@ -2,7 +2,7 @@
 
 Name:     squid
 Version:  5.5
-Release:  21%{?dist}
+Release:  22%{?dist}.1
 Summary:  The Squid proxy caching server
 Epoch:    7
 # See CREDITS for breakdown of non GPLv2+ code
@@ -56,6 +56,8 @@ Patch212: squid-5.5-fatal-read-data-from-mem.patch
 Patch213: squid-5.5-cache-peer-connect-errors.patch
 # https://issues.redhat.com/browse/RHEL-50261
 Patch214: squid-5.5-store-client-leak-fix.patch
+# https://issues.redhat.com/browse/RHEL-77084
+Patch215: squid-5.5-crash-notedestinationsend.patch
 
 # Security patches
 # https://bugzilla.redhat.com/show_bug.cgi?id=2100721
@@ -91,6 +93,8 @@ Patch515: squid-5.5-CVE-2024-23638.patch
 # Regression caused by squid-5.5-CVE-2023-46846.patch
 # Upstream PR: https://github.com/squid-cache/squid/pull/1914
 Patch516: squid-5.5-ignore-wsp-after-chunk-size.patch
+# https://bugzilla.redhat.com/show_bug.cgi?id=2404736
+Patch517: squid-5.5-CVE-2025-62168.patch
 
 # cache_swap.sh
 Requires: bash gawk
@@ -166,6 +170,7 @@ lookup program (dnsserver), a program for retrieving FTP data
 %patch210 -p1 -b .ipv6-crash
 %patch211 -p1 -b .large-upload-buffer-dies
 %patch213 -p1 -b .cache-peer-connect-errors
+%patch215 -p1 -b .notedestinationsend
 
 %patch501 -p1 -b .CVE-2021-46784
 %patch502 -p1 -b .CVE-2022-41318
@@ -183,6 +188,7 @@ lookup program (dnsserver), a program for retrieving FTP data
 %patch514 -p1 -b .CVE-2024-37894
 %patch515 -p1 -b .CVE-2024-23638
 %patch516 -p1 -b .ignore-wsp-chunk-sz
+%patch517 -p1 -b .CVE-2025-62168
 
 # patch506 follow-up
 %patch212 -p1 -b .fatal-read-data-from-mem
@@ -414,6 +420,13 @@ fi
 
 
 %changelog
+* Mon Oct 20 2025 Luboš Uhliarik <luhliari@redhat.com> - 7:5.5-22.1
+- Resolves: RHEL-122492 - squid: Squid vulnerable to information disclosure via
+  authentication credential leakage in error handling (CVE-2025-62168)
+
+* Thu Oct 02 2025 Luboš Uhliarik <luhliari@redhat.com> - 7:5.5-22
+- Resolves: RHEL-77084 - squid crashes with noteDestinationsEnd check failed
+
 * Wed Jul 16 2025 Luboš Uhliarik <luhliari@redhat.com> - 7:5.5-21
 - Resolves: RHEL-50261 - Squid memory usage increases until OOM.
 
