@@ -2,7 +2,7 @@
 
 Name:     squid
 Version:  6.10
-Release:  5%{?dist}
+Release:  6%{?dist}.1
 Summary:  The Squid proxy caching server
 Epoch:    7
 # See CREDITS for breakdown of non GPLv2+ code
@@ -42,6 +42,13 @@ Patch205: squid-6.1-crash-half-closed.patch
 Patch206: squid-6.10-ignore-wsp-after-chunk-size.patch
 # https://bugs.squid-cache.org/show_bug.cgi?id=5214
 Patch207: squid-6.10-large-upload-buffer-dies.patch
+# Upstream commit: https://github.com/squid-cache/squid/commit/2e7dea3cedd3ef2f071dee82867c4147f17376dd
+# https://issues.redhat.com/browse/RHEL-86817
+Patch208: squid-6.10-cache-peer-connect-errors.patch
+
+# Security patches
+# https://bugzilla.redhat.com/show_bug.cgi?id=2404736
+Patch500: squid-6.10-CVE-2025-62168.patch
 
 # cache_swap.sh
 Requires: bash gawk
@@ -326,6 +333,14 @@ fi
 
 
 %changelog
+* Mon Oct 20 2025 Luboš Uhliarik <luhliari@redhat.com> - 7:6.10-6.1
+- Resolves: RHEL-122480 - CVE-2025-62168 squid: Squid vulnerable to information
+  disclosure via authentication credential leakage in error handling
+
+* Thu Apr 10 2025 Luboš Uhliarik <luhliari@redhat.com> - 7:6.10-6
+- Resolves: RHEL-86817 - ”TCP connection to XX.XX.XX.XX/XXXX failed” message is
+  output frequently on RHEL10
+
 * Thu Nov 07 2024 Luboš Uhliarik <luhliari@redhat.com> - 7:6.10-5
 - Disable ESI support
 - Resolves: RHEL-65069 - CVE-2024-45802 squid: Denial of Service processing ESI

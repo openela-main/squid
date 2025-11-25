@@ -1,0 +1,223 @@
+diff --git a/src/CachePeer.cc b/src/CachePeer.cc
+index 1a5ea04..b67ac3f 100644
+--- a/src/CachePeer.cc
++++ b/src/CachePeer.cc
+@@ -68,20 +68,11 @@ CachePeer::noteSuccess()
+     }
+ }
+ 
+-void
+-CachePeer::noteFailure(const Http::StatusCode code)
+-{
+-    if (Http::Is4xx(code))
+-        return; // this failure is not our fault
+-
+-    countFailure();
+-}
+-
+ // TODO: Require callers to detail failures instead of using one (and often
+ // misleading!) "connection failed" phrase for all of them.
+ /// noteFailure() helper for handling failures attributed to this peer
+ void
+-CachePeer::countFailure()
++CachePeer::noteFailure()
+ {
+     stats.last_connect_failure = squid_curtime;
+     if (tcp_up > 0)
+diff --git a/src/CachePeer.h b/src/CachePeer.h
+index 6c4e4fc..180c76d 100644
+--- a/src/CachePeer.h
++++ b/src/CachePeer.h
+@@ -38,9 +38,8 @@ public:
+     /// reacts to a successful establishment of a connection to this cache_peer
+     void noteSuccess();
+ 
+-    /// reacts to a failure on a connection to this cache_peer
+-    /// \param code a received response status code, if any
+-    void noteFailure(Http::StatusCode code);
++    /// reacts to a failed attempt to establish a connection to this cache_peer
++    void noteFailure();
+ 
+     /// (re)configure cache_peer name=value
+     void rename(const char *);
+@@ -238,14 +237,13 @@ NoteOutgoingConnectionSuccess(CachePeer * const peer)
+         peer->noteSuccess();
+ }
+ 
+-/// reacts to a failure on a connection to an origin server or cache_peer
++/// reacts to a failed attempt to establish a connection to an origin server or cache_peer
+ /// \param peer nil if the connection is to an origin server
+-/// \param code a received response status code, if any
+ inline void
+-NoteOutgoingConnectionFailure(CachePeer * const peer, const Http::StatusCode code)
++NoteOutgoingConnectionFailure(CachePeer * const peer)
+ {
+     if (peer)
+-        peer->noteFailure(code);
++        peer->noteFailure();
+ }
+ 
+ /// identify the given cache peer in cache.log messages and such
+diff --git a/src/HappyConnOpener.cc b/src/HappyConnOpener.cc
+index 9812160..a2d3052 100644
+--- a/src/HappyConnOpener.cc
++++ b/src/HappyConnOpener.cc
+@@ -638,7 +638,7 @@ HappyConnOpener::handleConnOpenerAnswer(Attempt &attempt, const CommConnectCbPar
+     lastError = makeError(ERR_CONNECT_FAIL);
+     lastError->xerrno = params.xerrno;
+ 
+-    NoteOutgoingConnectionFailure(params.conn->getPeer(), lastError->httpStatus);
++    NoteOutgoingConnectionFailure(params.conn->getPeer());
+ 
+     if (spareWaiting)
+         updateSpareWaitAfterPrimeFailure();
+diff --git a/src/PeerPoolMgr.cc b/src/PeerPoolMgr.cc
+index 7becaf6..448bfed 100644
+--- a/src/PeerPoolMgr.cc
++++ b/src/PeerPoolMgr.cc
+@@ -86,7 +86,7 @@ PeerPoolMgr::handleOpenedConnection(const CommConnectCbParams &params)
+     }
+ 
+     if (params.flag != Comm::OK) {
+-        NoteOutgoingConnectionFailure(peer, Http::scNone);
++        NoteOutgoingConnectionFailure(peer);
+         checkpoint("conn opening failure"); // may retry
+         return;
+     }
+diff --git a/src/clients/HttpTunneler.cc b/src/clients/HttpTunneler.cc
+index f31ce52..4840866 100644
+--- a/src/clients/HttpTunneler.cc
++++ b/src/clients/HttpTunneler.cc
+@@ -90,7 +90,7 @@ Http::Tunneler::handleConnectionClosure(const CommCloseCbParams &)
+ {
+     closer = nullptr;
+     if (connection) {
+-        countFailingConnection(nullptr);
++        countFailingConnection();
+         connection->noteClosure();
+         connection = nullptr;
+     }
+@@ -355,7 +355,7 @@ Http::Tunneler::bailWith(ErrorState *error)
+ 
+     if (const auto failingConnection = connection) {
+         // TODO: Reuse to-peer connections after a CONNECT error response.
+-        countFailingConnection(error);
++        countFailingConnection();
+         disconnect();
+         failingConnection->close();
+     }
+@@ -374,10 +374,12 @@ Http::Tunneler::sendSuccess()
+ }
+ 
+ void
+-Http::Tunneler::countFailingConnection(const ErrorState * const error)
++Http::Tunneler::countFailingConnection()
+ {
+     assert(connection);
+-    NoteOutgoingConnectionFailure(connection->getPeer(), error ? error->httpStatus : Http::scNone);
++    // No NoteOutgoingConnectionFailure(connection->getPeer()) call here because
++    // we do not blame cache_peer for CONNECT failures (on top of a successfully
++    // established connection to that cache_peer).
+     if (noteFwdPconnUse && connection->isOpen())
+         fwdPconnPool->noteUses(fd_table[connection->fd].pconn.uses);
+ }
+diff --git a/src/clients/HttpTunneler.h b/src/clients/HttpTunneler.h
+index eb8dcee..d5090d3 100644
+--- a/src/clients/HttpTunneler.h
++++ b/src/clients/HttpTunneler.h
+@@ -80,7 +80,7 @@ private:
+     void disconnect();
+ 
+     /// updates connection usage history before the connection is closed
+-    void countFailingConnection(const ErrorState *);
++    void countFailingConnection();
+ 
+     AsyncCall::Pointer writer; ///< called when the request has been written
+     AsyncCall::Pointer reader; ///< called when the response should be read
+diff --git a/src/neighbors.cc b/src/neighbors.cc
+index cf03505..628b801 100644
+--- a/src/neighbors.cc
++++ b/src/neighbors.cc
+@@ -1311,7 +1311,7 @@ peerProbeConnectDone(const Comm::ConnectionPointer &conn, Comm::Flag status, int
+     if (status == Comm::OK)
+         p->noteSuccess();
+     else
+-        p->noteFailure(Http::scNone);
++        p->noteFailure();
+ 
+     -- p->testing_now;
+     conn->close();
+diff --git a/src/security/BlindPeerConnector.cc b/src/security/BlindPeerConnector.cc
+index 7372df9..b884127 100644
+--- a/src/security/BlindPeerConnector.cc
++++ b/src/security/BlindPeerConnector.cc
+@@ -76,7 +76,7 @@ Security::BlindPeerConnector::noteNegotiationDone(ErrorState *error)
+         // based on TCP results, SSL results, or both. And the code is probably not
+         // consistent in this aspect across tunnelling and forwarding modules.
+         if (peer && peer->secure.encryptTransport)
+-            peer->noteFailure(error->httpStatus);
++            peer->noteFailure();
+         return;
+     }
+ 
+diff --git a/src/security/PeerConnector.cc b/src/security/PeerConnector.cc
+index f122294..96c2f0e 100644
+--- a/src/security/PeerConnector.cc
++++ b/src/security/PeerConnector.cc
+@@ -115,7 +115,7 @@ Security::PeerConnector::commCloseHandler(const CommCloseCbParams &params)
+     err->detailError(d);
+ 
+     if (serverConn) {
+-        countFailingConnection(err);
++        countFailingConnection();
+         serverConn->noteClosure();
+         serverConn = nullptr;
+     }
+@@ -507,7 +507,7 @@ Security::PeerConnector::bail(ErrorState *error)
+     answer().error = error;
+ 
+     if (const auto failingConnection = serverConn) {
+-        countFailingConnection(error);
++        countFailingConnection();
+         disconnect();
+         failingConnection->close();
+     }
+@@ -525,10 +525,10 @@ Security::PeerConnector::sendSuccess()
+ }
+ 
+ void
+-Security::PeerConnector::countFailingConnection(const ErrorState * const error)
++Security::PeerConnector::countFailingConnection()
+ {
+     assert(serverConn);
+-    NoteOutgoingConnectionFailure(serverConn->getPeer(), error ? error->httpStatus : Http::scNone);
++    NoteOutgoingConnectionFailure(serverConn->getPeer());
+     // TODO: Calling PconnPool::noteUses() should not be our responsibility.
+     if (noteFwdPconnUse && serverConn->isOpen())
+         fwdPconnPool->noteUses(fd_table[serverConn->fd].pconn.uses);
+diff --git a/src/security/PeerConnector.h b/src/security/PeerConnector.h
+index 3c7c01b..b00f385 100644
+--- a/src/security/PeerConnector.h
++++ b/src/security/PeerConnector.h
+@@ -150,7 +150,7 @@ protected:
+     void disconnect();
+ 
+     /// updates connection usage history before the connection is closed
+-    void countFailingConnection(const ErrorState *);
++    void countFailingConnection();
+ 
+     /// If called the certificates validator will not used
+     void bypassCertValidator() {useCertValidator_ = false;}
+diff --git a/src/tests/stub_libsecurity.cc b/src/tests/stub_libsecurity.cc
+index 3b6eb79..8e14ac1 100644
+--- a/src/tests/stub_libsecurity.cc
++++ b/src/tests/stub_libsecurity.cc
+@@ -97,7 +97,7 @@ void PeerConnector::bail(ErrorState *) STUB
+ void PeerConnector::sendSuccess() STUB
+ void PeerConnector::callBack() STUB
+ void PeerConnector::disconnect() STUB
+-void PeerConnector::countFailingConnection(const ErrorState *) STUB
++void PeerConnector::countFailingConnection() STUB
+ void PeerConnector::recordNegotiationDetails() STUB
+ EncryptorAnswer &PeerConnector::answer() STUB_RETREF(EncryptorAnswer)
+ }
