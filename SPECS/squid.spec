@@ -2,7 +2,7 @@
 
 Name:     squid
 Version:  5.5
-Release:  22%{?dist}.1
+Release:  22%{?dist}.2
 Summary:  The Squid proxy caching server
 Epoch:    7
 # See CREDITS for breakdown of non GPLv2+ code
@@ -58,6 +58,8 @@ Patch213: squid-5.5-cache-peer-connect-errors.patch
 Patch214: squid-5.5-store-client-leak-fix.patch
 # https://issues.redhat.com/browse/RHEL-77084
 Patch215: squid-5.5-crash-notedestinationsend.patch
+# follow-up to CVE-2024-25111
+Patch216: squid-5.5-dont-stuck-respmod.patch
 
 # Security patches
 # https://bugzilla.redhat.com/show_bug.cgi?id=2100721
@@ -185,6 +187,8 @@ lookup program (dnsserver), a program for retrieving FTP data
 %patch511 -p1 -b .CVE-2023-50269
 %patch512 -p1 -b .CVE-2024-25617
 %patch513 -p1 -b .CVE-2024-25111
+# follow-up to CVE-2024-25111
+%patch216 -p1 -b .dont-stuck-respmod
 %patch514 -p1 -b .CVE-2024-37894
 %patch515 -p1 -b .CVE-2024-23638
 %patch516 -p1 -b .ignore-wsp-chunk-sz
@@ -420,6 +424,10 @@ fi
 
 
 %changelog
+* Thu Dec 04 2025 Luboš Uhliarik <luhliari@redhat.com> - 7:5.5-22.2
+- Resolves: RHEL-131797 - "ICAP_ERR_OTHER/408" occurs in icap.log when
+  downloading a file on RHEL9
+
 * Mon Oct 20 2025 Luboš Uhliarik <luhliari@redhat.com> - 7:5.5-22.1
 - Resolves: RHEL-122492 - squid: Squid vulnerable to information disclosure via
   authentication credential leakage in error handling (CVE-2025-62168)

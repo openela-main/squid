@@ -1,0 +1,1798 @@
+From 25225a808d868c40840f44e9ac62f5a4cafe901e Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Lubo=C5=A1=20Uhliarik?= <luhliari@redhat.com>
+Date: Fri, 14 Nov 2025 10:49:33 +0100
+Subject: [PATCH] 
+ https://github.com/squid-cache/squid/commit/a928fdfda5ada32c76878b8ef3bde78c808a0bed
+ https://github.com/squid-cache/squid/commit/06a1a2ac5aa41297078b4ebd666b0178107bd81d
+ https://github.com/squid-cache/squid/commit/2669f3c5ef1b406cf015934e3bb3982840a853dc
+
+Preserve caller context across (and improve) deferred reads
+ (#1025)
+
+The transaction context was not saved/restored when dealing with
+deferred reads initiated by events like the DelayPools::Update() event.
+To fix this, we refactored MemObject::delayRead() and its descendants to
+use an AsyncCall, which automatically stores/restores code context.
+
+Using explicit async callbacks highlighted the danger of passing
+Connection object via CommRead that does not maintain a closure
+callback. There was also a related "stuck transaction" suspicion
+documented in DeferredReadManager::kickARead(). Fortunately, all these
+problems could now be solved by removing DeferredRead and CommRead
+classes! The delayed readers already store the Connection object,
+maintain closure callbacks, and have to check stored Connection validity
+before reading anyway. The general/centralized delayed reading logic is
+not really about reading and Connections (those parts are handled by
+transaction-specific code) but about triggering reading attempts.
+Asynchronous calls are perfect (and sufficient) for doing that.
+
+Also fixed Delay Pools for Gopher: delayAwareRead() was initiated only
+once from gopherSendComplete() and the subsequent read calls were
+delay-unaware (i.e. immediate) reads.
+
+Also fixed a Delay Pools problem with active transactions: A transaction
+started with Delay Pools on becomes stuck if a reconfiguration turns
+Delay Pools off.
+
+Also refactored the existing AsyncCall FIFO intrusive storage, making
+its reuse possible (and marked one candidate with a TODO).
+
+Bug 5352: Do not get stuck when RESPMOD is slower than
+ read(2) (#1777)
+
+    ... RESPMOD BodyPipe buffer becomes full ...
+    maybeMakeSpaceAvailable: will not read up to 0
+    The AsyncCall Client::noteDelayAwareReadChance constructed
+
+    ... RESPMOD consumes some buffered virgin body data ...
+    entering BodyProducer::noteMoreBodySpaceAvailable
+    leaving BodyProducer::noteMoreBodySpaceAvailable
+
+    ... read_timeout seconds later ...
+    http.cc(148) httpTimeout
+    FwdState.cc(471) fail: ERR_READ_TIMEOUT "Gateway Timeout"
+
+When RESPMOD does not empty its adaptation BodyPipe buffer fast enough,
+readReply() may eventually fill that buffer and call delayRead(),
+anticipating a noteDelayAwareReadChance() callback from Store or Server
+delay pools. That callback never happens if Store and Server are not
+getting any data -- they do not even start working until RESPMOD service
+starts releasing adapted/echoed response back to Squid! Meanwhile, our
+flags.do_next_read (cleared by readReply() caller) remains false.
+
+When/if RESPMOD service eventually frees some BodyPipe buffer space,
+triggering noteMoreBodySpaceAvailable() notification, nothing changes
+because maybeReadVirginBody() quits when flags.do_next_read is false.
+
+noteMoreBodySpaceAvailable() could not just make flags.do_next_read true
+because that flag may be false for a variety of other/permanent reasons.
+Instead, we replaced that one-size-fits-all flag with more specific
+checks so that reading can resume if it is safe to resume it. This
+change addresses a couple of flag-related XXXs.
+
+The bug was introduced in 2023 commit 50c5af88. Prior that that change,
+delayRead() was not called when RESPMOD BodyPipe buffer became full
+because maybeMakeSpaceAvailable() returned false in that case, blocking
+maybeReadVirginBody() from triggering readReply() via Comm::Read(). We
+missed flags.do_next_read dependency and that Store-specific delayRead()
+cannot be used to wait for adaptation buffer space to become available.
+
+XXX: To reduce risks, this change duplicates a part of
+calcBufferSpaceToReserve() logic. Removing that duplication requires
+significant (and risky) refactoring of several related methods.
+
+Bug 5352: Do not get stuck in RESPMOD after pausing peer
+ read(2) (#2065)
+
+The transaction gets stuck if Squid, while sending virgin body bytes to
+an ICAP RESPMOD service, temporary stops reading additional virgin body
+bytes from cache_peer or origin server. Squid pauses reading (with
+readSizeWanted becoming zero) if reading more virgin bytes is temporary
+prohibited by delay pools and/or read_ahead_gap limits:
+
+    readReply: avoid delayRead() to give adaptation a chance to drain...
+
+HttpStateData::readReply() starts waiting for ModXact to drain the
+BodyPipe buffer, but that draining may not happen, either because
+ModXact::virginConsume() is not called at all[^1] or because it is
+"postponing consumption" when BodyPipe still has some unused space[^2].
+
+With HttpStateData not reading more virgin bytes, Squid may not write
+more virgin body bytes to the ICAP service, and the ICAP service may not
+start or continue responding to the RESPMOD request. Without that ICAP
+activity, ModXact does not consume, the virgin BodyPipe buffer is not
+drained, HttpStateData is not reading, and no progress is possible.
+
+HttpStateData::readReply() should start waiting for adaptation to drain
+BodyPipe only when the buffer becomes completely full (instead of when
+it is not empty). This change may increase virgin response body bytes
+accumulation but not the buffer capacity because existing buffer
+space-increasing logic in maybeMakeSpaceAvailable() remains intact.
+
+To prevent stalling, both BodyPipe ends (i.e. HttpStateData and
+Icap::ModXact) must use matching "progress is possible" conditions, but
+
+* HttpStateData used hasContent()
+* Icap::ModXact used spaceSize()
+* Ftp::Client used potentialSpaceSize()
+
+Now, all three use matching potentialSpaceSize()-based conditions.
+
+Squid eCAP code is unaffected by this bug, because it does not postpone
+BodyPipe consumption. eCAP API does not expose virgin body buffer
+capacity, so an eCAP adapter that postpones consumption risks filling
+the virgin body buffer and stalling. This is an eCAP API limitation.
+
+Broken since 2024 commit cc8b26f.
+
+[^1]: Zero readSizeWanted is reachable without delay pools, but only if
+Squid receives an adapted response (that makes readAheadPolicyCanRead()
+false by filling StoreEntry). Ideally, receiving an adapted response
+should result in a virginConsume() calls (that would trigger BodyPipe
+draining), but currently it may not. Reliably starting virgin data
+consumption sooner is not trivial and deserves a dedicated change.
+
+[^2]: ModXact postpones consumption to preserve virgin bytes for ICAP
+retries and similar purposes. ModXact believes it is safe to postpone
+because there is still space left in the buffer for HttpStateData to
+continue to make progress. ModXact would normally start or resume
+draining the buffer when sending more virgin bytes to the ICAP service.
+---
+ src/CommRead.h                                |  65 --------
+ src/CompositePoolNode.h                       |   6 +-
+ src/DelayId.cc                                |   4 +-
+ src/DelayId.h                                 |   3 +-
+ src/DelayIdComposite.h                        |   5 +-
+ src/DelayPool.cc                              |   6 +-
+ src/DelayTagged.cc                            |   2 +-
+ src/DelayTagged.h                             |   3 +-
+ src/DelayVector.cc                            |   5 +-
+ src/DelayVector.h                             |   3 +-
+ src/DiskIO/DiskDaemon/DiskdIOStrategy.cc      |   1 +
+ src/DiskIO/DiskThreads/DiskThreadsDiskFile.cc |   1 +
+ src/Makefile.am                               |   1 -
+ src/MemObject.cc                              |   6 +-
+ src/MemObject.h                               |   8 +-
+ src/Store.h                                   |   5 +-
+ src/adaptation/icap/ModXact.cc                |   8 +-
+ src/base/AsyncCall.h                          |   4 +-
+ src/base/AsyncCallList.cc                     |  48 ++++++
+ src/base/AsyncCallList.h                      |  43 +++++
+ src/base/AsyncCallQueue.cc                    |  41 +----
+ src/base/AsyncCallQueue.h                     |  14 +-
+ src/base/DelayedAsyncCalls.cc                 |  27 ++++
+ src/base/DelayedAsyncCalls.h                  |  33 ++++
+ src/base/Makefile.am                          |   4 +
+ src/base/forward.h                            |   3 +
+ src/clients/Client.cc                         |  12 ++
+ src/clients/Client.h                          |  11 ++
+ src/clients/FtpClient.cc                      |  24 ++-
+ src/clients/FtpClient.h                       |   1 +
+ src/comm.cc                                   | 150 +-----------------
+ src/delay_pools.cc                            |   9 +-
+ src/http.cc                                   |  81 ++++++----
+ src/http.h                                    |   6 +
+ src/http/StateFlags.h                         |   1 -
+ src/mgr/Forwarder.cc                          |   1 +
+ src/mgr/StoreToCommWriter.cc                  |   1 +
+ src/store.cc                                  |  38 -----
+ src/tests/stub_DelayId.cc                     |   2 +-
+ src/tunnel.cc                                 |   2 +-
+ 40 files changed, 316 insertions(+), 372 deletions(-)
+ delete mode 100644 src/CommRead.h
+ create mode 100644 src/base/AsyncCallList.cc
+ create mode 100644 src/base/AsyncCallList.h
+ create mode 100644 src/base/DelayedAsyncCalls.cc
+ create mode 100644 src/base/DelayedAsyncCalls.h
+
+diff --git a/src/CommRead.h b/src/CommRead.h
+deleted file mode 100644
+index b0459d7..0000000
+--- a/src/CommRead.h
++++ /dev/null
+@@ -1,65 +0,0 @@
+-/*
+- * Copyright (C) 1996-2022 The Squid Software Foundation and contributors
+- *
+- * Squid software is distributed under GPLv2+ license and includes
+- * contributions from numerous individuals and organizations.
+- * Please see the COPYING and CONTRIBUTORS files for details.
+- */
+-
+-/* DEBUG: section 05    Comm */
+-
+-#ifndef COMMREAD_H
+-#define COMMREAD_H
+-
+-#include "base/CbDataList.h"
+-#include "comm.h"
+-#include "comm/forward.h"
+-#include "CommCalls.h"
+-
+-class CommRead
+-{
+-
+-public:
+-    CommRead();
+-    CommRead(const Comm::ConnectionPointer &c, char *buf, int len, AsyncCall::Pointer &callback);
+-    Comm::ConnectionPointer conn;
+-    char *buf;
+-    int len;
+-    AsyncCall::Pointer callback;
+-};
+-
+-class DeferredRead
+-{
+-
+-public:
+-    typedef void DeferrableRead(void *context, CommRead const &);
+-    DeferredRead ();
+-    DeferredRead (DeferrableRead *, void *, CommRead const &);
+-    void markCancelled();
+-    DeferrableRead *theReader;
+-    void *theContext;
+-    CommRead theRead;
+-    bool cancelled;
+-    AsyncCall::Pointer closer; ///< internal close handler used by Comm
+-
+-private:
+-};
+-
+-class DeferredReadManager
+-{
+-
+-public:
+-    ~DeferredReadManager();
+-    void delayRead(DeferredRead const &);
+-    void kickReads(int const count);
+-
+-private:
+-    static CLCB CloseHandler;
+-    static DeferredRead popHead(CbDataListContainer<DeferredRead> &deferredReads);
+-    void kickARead(DeferredRead const &);
+-    void flushReads();
+-    CbDataListContainer<DeferredRead> deferredReads;
+-};
+-
+-#endif /* COMMREAD_H */
+-
+diff --git a/src/CompositePoolNode.h b/src/CompositePoolNode.h
+index add27d2..e00df8f 100644
+--- a/src/CompositePoolNode.h
++++ b/src/CompositePoolNode.h
+@@ -13,7 +13,7 @@
+ 
+ #if USE_DELAY_POOLS
+ #include "auth/UserRequest.h"
+-#include "CommRead.h"
++#include "base/DelayedAsyncCalls.h"
+ #include "DelayIdComposite.h"
+ #include "DelayPools.h"
+ #include "ip/Address.h"
+@@ -37,7 +37,7 @@ public:
+ 
+     class CompositeSelectionDetails;
+     virtual DelayIdComposite::Pointer id(CompositeSelectionDetails &) = 0;
+-    void delayRead(DeferredRead const &);
++    void delayRead(const AsyncCallPointer &);
+ 
+     /// \ingroup DelayPoolsAPI
+     class CompositeSelectionDetails
+@@ -55,7 +55,7 @@ public:
+ 
+ protected:
+     void kickReads();
+-    DeferredReadManager deferredReads;
++    DelayedAsyncCalls deferredReads;
+ };
+ 
+ #endif /* USE_DELAY_POOLS */
+diff --git a/src/DelayId.cc b/src/DelayId.cc
+index 9ce4533..84a2117 100644
+--- a/src/DelayId.cc
++++ b/src/DelayId.cc
+@@ -15,8 +15,8 @@
+  */
+ #if USE_DELAY_POOLS
+ #include "acl/FilledChecklist.h"
++#include "base/DelayedAsyncCalls.h"
+ #include "client_side_request.h"
+-#include "CommRead.h"
+ #include "DelayId.h"
+ #include "DelayPool.h"
+ #include "DelayPools.h"
+@@ -166,7 +166,7 @@ DelayId::bytesIn(int qty)
+ }
+ 
+ void
+-DelayId::delayRead(DeferredRead const &aRead)
++DelayId::delayRead(const AsyncCall::Pointer &aRead)
+ {
+     assert (compositeId != NULL);
+     compositeId->delayRead(aRead);
+diff --git a/src/DelayId.h b/src/DelayId.h
+index adf9e4c..c7249db 100644
+--- a/src/DelayId.h
++++ b/src/DelayId.h
+@@ -11,6 +11,7 @@
+ 
+ #if USE_DELAY_POOLS
+ 
++#include "base/forward.h"
+ #include "DelayIdComposite.h"
+ 
+ class ClientHttpRequest;
+@@ -34,7 +35,7 @@ public:
+     int bytesWanted(int min, int max) const;
+     void bytesIn (int qty);
+     void setNoDelay(bool const);
+-    void delayRead(DeferredRead const &);
++    void delayRead(const AsyncCallPointer &);
+ 
+ private:
+     unsigned short pool_;
+diff --git a/src/DelayIdComposite.h b/src/DelayIdComposite.h
+index 61be1bb..e6c0a53 100644
+--- a/src/DelayIdComposite.h
++++ b/src/DelayIdComposite.h
+@@ -12,11 +12,10 @@
+ #define DELAYIDCOMPOSITE_H
+ 
+ #if USE_DELAY_POOLS
++#include "base/forward.h"
+ #include "base/RefCount.h"
+ #include "fatal.h"
+ 
+-class DeferredRead;
+-
+ class DelayIdComposite : public RefCountable
+ {
+ 
+@@ -27,7 +26,7 @@ public:
+     virtual int bytesWanted (int min, int max) const =0;
+     virtual void bytesIn(int qty) = 0;
+     /* only aggregate and vector need this today */
+-    virtual void delayRead(DeferredRead const &) {fatal("Not implemented");}
++    virtual void delayRead(const AsyncCallPointer &) { fatal("Not implemented"); }
+ };
+ 
+ #endif /* USE_DELAY_POOLS */
+diff --git a/src/DelayPool.cc b/src/DelayPool.cc
+index f7f3214..e684ab0 100644
+--- a/src/DelayPool.cc
++++ b/src/DelayPool.cc
+@@ -77,9 +77,9 @@ DelayPool::freeData()
+ 
+ // TODO: create DelayIdComposite.cc
+ void
+-CompositePoolNode::delayRead(DeferredRead const &aRead)
++CompositePoolNode::delayRead(const AsyncCall::Pointer &aRead)
+ {
+-    deferredReads.delayRead(aRead);
++    deferredReads.delay(aRead);
+ }
+ 
+ #include "comm.h"
+@@ -87,7 +87,7 @@ CompositePoolNode::delayRead(DeferredRead const &aRead)
+ void
+ CompositePoolNode::kickReads()
+ {
+-    deferredReads.kickReads(-1);
++    deferredReads.schedule();
+ }
+ 
+ #endif /* USE_DELAY_POOLS */
+diff --git a/src/DelayTagged.cc b/src/DelayTagged.cc
+index 423af06..2ed874e 100644
+--- a/src/DelayTagged.cc
++++ b/src/DelayTagged.cc
+@@ -173,7 +173,7 @@ DelayTagged::Id::bytesIn(int qty)
+ }
+ 
+ void
+-DelayTagged::Id::delayRead(DeferredRead const &aRead)
++DelayTagged::Id::delayRead(const AsyncCall::Pointer &aRead)
+ {
+     theTagged->delayRead(aRead);
+ }
+diff --git a/src/DelayTagged.h b/src/DelayTagged.h
+index 7a1e58f..5061bce 100644
+--- a/src/DelayTagged.h
++++ b/src/DelayTagged.h
+@@ -14,6 +14,7 @@
+ #if USE_DELAY_POOLS
+ 
+ #include "auth/Gadgets.h"
++#include "base/forward.h"
+ #include "CompositePoolNode.h"
+ #include "DelayBucket.h"
+ #include "DelayIdComposite.h"
+@@ -64,7 +65,7 @@ private:
+         ~Id();
+         virtual int bytesWanted (int min, int max) const;
+         virtual void bytesIn(int qty);
+-        virtual void delayRead(DeferredRead const &);
++        virtual void delayRead(const AsyncCallPointer &);
+ 
+     private:
+         RefCount<DelayTagged> theTagged;
+diff --git a/src/DelayVector.cc b/src/DelayVector.cc
+index 8eb15b3..4fffe48 100644
+--- a/src/DelayVector.cc
++++ b/src/DelayVector.cc
+@@ -11,8 +11,9 @@
+ #include "squid.h"
+ 
+ #if USE_DELAY_POOLS
++#include "base/AsyncCall.h"
++#include "base/DelayedAsyncCalls.h"
+ #include "comm/Connection.h"
+-#include "CommRead.h"
+ #include "DelayVector.h"
+ 
+ DelayVector::DelayVector()
+@@ -126,7 +127,7 @@ DelayVector::Id::bytesIn(int qty)
+ }
+ 
+ void
+-DelayVector::Id::delayRead(DeferredRead const &aRead)
++DelayVector::Id::delayRead(const AsyncCallPointer &aRead)
+ {
+     theVector->delayRead(aRead);
+ }
+diff --git a/src/DelayVector.h b/src/DelayVector.h
+index 1b2bd54..d024372 100644
+--- a/src/DelayVector.h
++++ b/src/DelayVector.h
+@@ -11,6 +11,7 @@
+ 
+ #if USE_DELAY_POOLS
+ 
++#include "base/forward.h"
+ #include "CompositePoolNode.h"
+ 
+ /// \ingroup DelayPoolsAPI
+@@ -42,7 +43,7 @@ private:
+         ~Id();
+         virtual int bytesWanted (int min, int max) const;
+         virtual void bytesIn(int qty);
+-        virtual void delayRead(DeferredRead const &);
++        virtual void delayRead(const AsyncCallPointer &);
+ 
+     private:
+         RefCount<DelayVector> theVector;
+diff --git a/src/DiskIO/DiskDaemon/DiskdIOStrategy.cc b/src/DiskIO/DiskDaemon/DiskdIOStrategy.cc
+index 0e7f09b..c82d79b 100644
+--- a/src/DiskIO/DiskDaemon/DiskdIOStrategy.cc
++++ b/src/DiskIO/DiskDaemon/DiskdIOStrategy.cc
+@@ -9,6 +9,7 @@
+ /* DEBUG: section 79    Squid-side DISKD I/O functions. */
+ 
+ #include "squid.h"
++#include "comm.h"
+ #include "comm/Loops.h"
+ #include "ConfigOption.h"
+ #include "diomsg.h"
+diff --git a/src/DiskIO/DiskThreads/DiskThreadsDiskFile.cc b/src/DiskIO/DiskThreads/DiskThreadsDiskFile.cc
+index b4156bd..d8d0e88 100644
+--- a/src/DiskIO/DiskThreads/DiskThreadsDiskFile.cc
++++ b/src/DiskIO/DiskThreads/DiskThreadsDiskFile.cc
+@@ -9,6 +9,7 @@
+ /* DEBUG: section 79    Disk IO Routines */
+ 
+ #include "squid.h"
++#include "comm.h"
+ #include "DiskIO/IORequestor.h"
+ #include "DiskIO/ReadRequest.h"
+ #include "DiskIO/WriteRequest.h"
+diff --git a/src/Makefile.am b/src/Makefile.am
+index 76a1ac1..2d0f04c 100644
+--- a/src/Makefile.am
++++ b/src/Makefile.am
+@@ -245,7 +245,6 @@ squid_SOURCES = \
+ 	CollapsedForwarding.cc \
+ 	CollapsedForwarding.h \
+ 	CollapsingHistory.h \
+-	CommRead.h \
+ 	CommandLine.cc \
+ 	CommandLine.h \
+ 	CompletionDispatcher.cc \
+diff --git a/src/MemObject.cc b/src/MemObject.cc
+index 7f154ca..0873e24 100644
+--- a/src/MemObject.cc
++++ b/src/MemObject.cc
+@@ -460,7 +460,7 @@ MemObject::setNoDelay(bool const newValue)
+ }
+ 
+ void
+-MemObject::delayRead(DeferredRead const &aRead)
++MemObject::delayRead(const AsyncCall::Pointer &aRead)
+ {
+ #if USE_DELAY_POOLS
+     if (readAheadPolicyCanRead()) {
+@@ -470,13 +470,13 @@ MemObject::delayRead(DeferredRead const &aRead)
+         }
+     }
+ #endif
+-    deferredReads.delayRead(aRead);
++    deferredReads.delay(aRead);
+ }
+ 
+ void
+ MemObject::kickReads()
+ {
+-    deferredReads.kickReads(-1);
++    deferredReads.schedule();
+ }
+ 
+ #if USE_DELAY_POOLS
+diff --git a/src/MemObject.h b/src/MemObject.h
+index 56bcd46..52e7866 100644
+--- a/src/MemObject.h
++++ b/src/MemObject.h
+@@ -9,7 +9,7 @@
+ #ifndef SQUID_MEMOBJECT_H
+ #define SQUID_MEMOBJECT_H
+ 
+-#include "CommRead.h"
++#include "base/DelayedAsyncCalls.h"
+ #include "dlink.h"
+ #include "http/RequestMethod.h"
+ #include "RemovalPolicy.h"
+@@ -201,7 +201,7 @@ public:
+     PeerSelector *ircb_data = nullptr;
+ 
+     /// used for notifying StoreEntry writers about 3rd-party initiated aborts
+-    AsyncCall::Pointer abortCallback;
++    AsyncCallPointer abortCallback;
+     RemovalPolicyNode repl;
+     int id = 0;
+     int64_t object_sz = -1;
+@@ -212,7 +212,7 @@ public:
+ 
+     SBuf vary_headers;
+ 
+-    void delayRead(DeferredRead const &);
++    void delayRead(const AsyncCallPointer &);
+     void kickReads();
+ 
+ private:
+@@ -222,7 +222,7 @@ private:
+     mutable String storeId_; ///< StoreId for our entry (usually request URI)
+     mutable String logUri_;  ///< URI used for logging (usually request URI)
+ 
+-    DeferredReadManager deferredReads;
++    DelayedAsyncCalls deferredReads;
+ };
+ 
+ /** global current memory removal policy */
+diff --git a/src/Store.h b/src/Store.h
+index 379cac2..e357ba1 100644
+--- a/src/Store.h
++++ b/src/Store.h
+@@ -9,11 +9,11 @@
+ #ifndef SQUID_STORE_H
+ #define SQUID_STORE_H
+ 
++#include "base/DelayedAsyncCalls.h"
+ #include "base/Packable.h"
+ #include "base/Range.h"
+ #include "base/RefCount.h"
+ #include "comm/forward.h"
+-#include "CommRead.h"
+ #include "hash.h"
+ #include "http/forward.h"
+ #include "http/RequestMethod.h"
+@@ -42,7 +42,6 @@ class StoreEntry : public hash_link, public Packable
+ {
+ 
+ public:
+-    static DeferredRead::DeferrableRead DeferReader;
+     bool checkDeferRead(int fd) const;
+ 
+     const char *getMD5Text() const;
+@@ -171,8 +170,6 @@ public:
+     void destroyMemObject();
+     int checkTooSmall();
+ 
+-    void delayAwareRead(const Comm::ConnectionPointer &conn, char *buf, int len, AsyncCall::Pointer callback);
+-
+     void setNoDelay (bool const);
+     void lastModified(const time_t when) { lastModified_ = when; }
+     /// \returns entry's 'effective' modification time
+diff --git a/src/adaptation/icap/ModXact.cc b/src/adaptation/icap/ModXact.cc
+index 982f38f..289d4e9 100644
+--- a/src/adaptation/icap/ModXact.cc
++++ b/src/adaptation/icap/ModXact.cc
+@@ -438,14 +438,10 @@ void Adaptation::Icap::ModXact::virginConsume()
+     BodyPipe &bp = *virgin.body_pipe;
+     const bool wantToPostpone = isRepeatable || canStartBypass || protectGroupBypass;
+ 
+-    // Why > 2? HttpState does not use the last bytes in the buffer
+-    // because delayAwareRead() is arguably broken. See
+-    // HttpStateData::maybeReadVirginBody for more details.
+-    if (wantToPostpone && bp.buf().spaceSize() > 2) {
++    if (wantToPostpone && bp.buf().potentialSpaceSize() > 0) {
+         // Postponing may increase memory footprint and slow the HTTP side
+         // down. Not postponing may increase the number of ICAP errors
+-        // if the ICAP service fails. We may also use "potential" space to
+-        // postpone more aggressively. Should the trade-off be configurable?
++        // if the ICAP service fails. Should the trade-off be configurable?
+         debugs(93, 8, HERE << "postponing consumption from " << bp.status());
+         return;
+     }
+diff --git a/src/base/AsyncCall.h b/src/base/AsyncCall.h
+index d516c54..cd082d9 100644
+--- a/src/base/AsyncCall.h
++++ b/src/base/AsyncCall.h
+@@ -35,13 +35,11 @@
+  */
+ 
+ class CallDialer;
+-class AsyncCallQueue;
+ 
+ class AsyncCall: public RefCountable
+ {
+ public:
+     typedef RefCount <AsyncCall> Pointer;
+-    friend class AsyncCallQueue;
+ 
+     AsyncCall(int aDebugSection, int aDebugLevel, const char *aName);
+     virtual ~AsyncCall();
+@@ -83,7 +81,7 @@ protected:
+ 
+     virtual void fire() = 0;
+ 
+-    AsyncCall::Pointer theNext; // used exclusively by AsyncCallQueue
++    AsyncCall::Pointer theNext; ///< for AsyncCallList and similar lists
+ 
+ private:
+     const char *isCanceled; // set to the cancelation reason by cancel()
+diff --git a/src/base/AsyncCallList.cc b/src/base/AsyncCallList.cc
+new file mode 100644
+index 0000000..faa0173
+--- /dev/null
++++ b/src/base/AsyncCallList.cc
+@@ -0,0 +1,48 @@
++/*
++ * Copyright (C) 1996-2022 The Squid Software Foundation and contributors
++ *
++ * Squid software is distributed under GPLv2+ license and includes
++ * contributions from numerous individuals and organizations.
++ * Please see the COPYING and CONTRIBUTORS files for details.
++ */
++
++#include "squid.h"
++#include "base/Assure.h"
++#include "base/AsyncCall.h"
++#include "base/AsyncCallList.h"
++
++void
++AsyncCallList::add(const AsyncCall::Pointer &call)
++{
++    Assure(call);
++    Assure(!call->Next());
++    if (tail) { // append to the existing list
++        Assure(head);
++        Assure(!tail->Next());
++        tail->setNext(call);
++        tail = call;
++    } else { // create a list from scratch
++        Assure(!head);
++        head = tail = call;
++    }
++    ++length;
++    Assure(length); // no overflows
++}
++
++AsyncCall::Pointer
++AsyncCallList::extract()
++{
++    if (!head)
++	    return AsyncCallPointer();
++
++    Assure(tail);
++    Assure(length);
++    const auto call = head;
++    head = call->Next();
++    call->setNext(nullptr);
++    if (tail == call)
++        tail = nullptr;
++    --length;
++    return call;
++}
++
+diff --git a/src/base/AsyncCallList.h b/src/base/AsyncCallList.h
+new file mode 100644
+index 0000000..8a8ad0c
+--- /dev/null
++++ b/src/base/AsyncCallList.h
+@@ -0,0 +1,43 @@
++/*
++ * Copyright (C) 1996-2022 The Squid Software Foundation and contributors
++ *
++ * Squid software is distributed under GPLv2+ license and includes
++ * contributions from numerous individuals and organizations.
++ * Please see the COPYING and CONTRIBUTORS files for details.
++ */
++
++#ifndef SQUID_BASE_ASYNCCALLLIST_H
++#define SQUID_BASE_ASYNCCALLLIST_H
++
++#include "base/forward.h"
++#include "base/RefCount.h"
++
++/// An efficient (but intrusive) AsyncCall storage preserving FIFO order.
++/// A given AsyncCall object may reside in at most one such storage.
++class AsyncCallList
++{
++public:
++    AsyncCallList() = default;
++    // prohibit copying: no AsyncCall should be present in two lists
++    AsyncCallList(const AsyncCallList &) = delete;
++    AsyncCallList &operator=(const AsyncCallList &) = delete;
++
++    /// stores the given async call
++    void add(const AsyncCallPointer &);
++
++    /// removes the earliest add()-ed call that is still stored (if any)
++    /// \returns the removed call (or nil)
++    /// \retval nil means the list stored no calls at extract() time
++    AsyncCallPointer extract();
++
++    /// the number of currently stored calls
++    size_t size() const { return length; }
++
++private:
++    AsyncCallPointer head; ///< the earliest still-stored call (or nil)
++    AsyncCallPointer tail; ///< the latest still-stored call (or nil)
++    size_t length = 0; ///< \copydoc size()
++};
++
++#endif /* SQUID_BASE_ASYNCCALLLIST_H */
++
+diff --git a/src/base/AsyncCallQueue.cc b/src/base/AsyncCallQueue.cc
+index ef6dca4..0bba288 100644
+--- a/src/base/AsyncCallQueue.cc
++++ b/src/base/AsyncCallQueue.cc
+@@ -15,52 +15,23 @@
+ 
+ AsyncCallQueue *AsyncCallQueue::TheInstance = 0;
+ 
+-AsyncCallQueue::AsyncCallQueue(): theHead(NULL), theTail(NULL)
+-{
+-}
+-
+-void AsyncCallQueue::schedule(AsyncCall::Pointer &call)
+-{
+-    assert(call != NULL);
+-    assert(!call->theNext);
+-    if (theHead != NULL) { // append
+-        assert(!theTail->theNext);
+-        theTail->theNext = call;
+-        theTail = call;
+-    } else { // create queue from cratch
+-        theHead = theTail = call;
+-    }
+-}
+-
+ // Fire all scheduled calls; returns true if at least one call was fired.
+ // The calls may be added while the current call is in progress.
+ bool
+ AsyncCallQueue::fire()
+ {
+-    const bool made = theHead != NULL;
+-    while (theHead) {
+-        CodeContext::Reset(theHead->codeContext);
+-        fireNext();
++    const auto made = scheduled.size() > 0;
++    while (const auto call = scheduled.extract()) {
++        CodeContext::Reset(call->codeContext);
++        debugs(call->debugSection, call->debugLevel, "entering " << *call);
++        call->make();
++        debugs(call->debugSection, call->debugLevel, "leaving " << *call);
+     }
+     if (made)
+         CodeContext::Reset();
+     return made;
+ }
+ 
+-void
+-AsyncCallQueue::fireNext()
+-{
+-    AsyncCall::Pointer call = theHead;
+-    theHead = call->theNext;
+-    call->theNext = NULL;
+-    if (theTail == call)
+-        theTail = NULL;
+-
+-    debugs(call->debugSection, call->debugLevel, "entering " << *call);
+-    call->make();
+-    debugs(call->debugSection, call->debugLevel, "leaving " << *call);
+-}
+-
+ AsyncCallQueue &
+ AsyncCallQueue::Instance()
+ {
+diff --git a/src/base/AsyncCallQueue.h b/src/base/AsyncCallQueue.h
+index 6e13996..0a31be8 100644
+--- a/src/base/AsyncCallQueue.h
++++ b/src/base/AsyncCallQueue.h
+@@ -9,9 +9,8 @@
+ #ifndef SQUID_ASYNCCALLQUEUE_H
+ #define SQUID_ASYNCCALLQUEUE_H
+ 
+-#include "base/AsyncCall.h"
+-
+-//class AsyncCall;
++#include "base/AsyncCallList.h"
++#include "base/forward.h"
+ 
+ // The queue of asynchronous calls. All calls are fired during a single main
+ // loop iteration until the queue is exhausted
+@@ -22,18 +21,15 @@ public:
+     static AsyncCallQueue &Instance();
+ 
+     // make this async call when we get a chance
+-    void schedule(AsyncCall::Pointer &call);
++    void schedule(const AsyncCallPointer &call) { scheduled.add(call); }
+ 
+     // fire all scheduled calls; returns true if at least one was fired
+     bool fire();
+ 
+ private:
+-    AsyncCallQueue();
+-
+-    void fireNext();
++    AsyncCallQueue() = default;
+ 
+-    AsyncCall::Pointer theHead;
+-    AsyncCall::Pointer theTail;
++    AsyncCallList scheduled; ///< calls waiting to be fire()d, in FIFO order
+ 
+     static AsyncCallQueue *TheInstance;
+ };
+diff --git a/src/base/DelayedAsyncCalls.cc b/src/base/DelayedAsyncCalls.cc
+new file mode 100644
+index 0000000..ddd2a9f
+--- /dev/null
++++ b/src/base/DelayedAsyncCalls.cc
+@@ -0,0 +1,27 @@
++/*
++ * Copyright (C) 1996-2022 The Squid Software Foundation and contributors
++ *
++ * Squid software is distributed under GPLv2+ license and includes
++ * contributions from numerous individuals and organizations.
++ * Please see the COPYING and CONTRIBUTORS files for details.
++ */
++
++#include "squid.h"
++#include "base/AsyncCall.h"
++#include "base/DelayedAsyncCalls.h"
++#include "Debug.h"
++
++void
++DelayedAsyncCalls::delay(const AsyncCall::Pointer &call)
++{
++    debugs(5, 3, call << " after " << deferredReads.size());
++    deferredReads.add(call);
++}
++
++void
++DelayedAsyncCalls::schedule()
++{
++    while (auto call = deferredReads.extract())
++        ScheduleCallHere(call);
++}
++
+diff --git a/src/base/DelayedAsyncCalls.h b/src/base/DelayedAsyncCalls.h
+new file mode 100644
+index 0000000..affe2ad
+--- /dev/null
++++ b/src/base/DelayedAsyncCalls.h
+@@ -0,0 +1,33 @@
++/*
++ * Copyright (C) 1996-2022 The Squid Software Foundation and contributors
++ *
++ * Squid software is distributed under GPLv2+ license and includes
++ * contributions from numerous individuals and organizations.
++ * Please see the COPYING and CONTRIBUTORS files for details.
++ */
++
++#ifndef SQUID_BASE_DELAYEDASYNCCALLS_H
++#define SQUID_BASE_DELAYEDASYNCCALLS_H
++
++#include "base/AsyncCallList.h"
++
++/// a FIFO list of async calls, all to be scheduled in FIFO order (on demand via
++/// the schedule() method or automatically at object destruction time)
++class DelayedAsyncCalls
++{
++public:
++    ~DelayedAsyncCalls() { schedule(); }
++
++    /// stores the given call to schedule it at schedule() or destruction time
++    void delay(const AsyncCallPointer &);
++
++    /// schedules and forgets all async calls previously stored by delay()
++    void schedule();
++
++private:
++    /// delay()-ed calls waiting to be scheduled, in delay() call order
++    AsyncCallList deferredReads;
++};
++
++#endif /* SQUID_BASE_DELAYEDASYNCCALLS_H */
++
+diff --git a/src/base/Makefile.am b/src/base/Makefile.am
+index 4602998..6dc2b73 100644
+--- a/src/base/Makefile.am
++++ b/src/base/Makefile.am
+@@ -15,6 +15,8 @@ libbase_la_SOURCES = \
+ 	Assure.h \
+ 	AsyncCall.cc \
+ 	AsyncCall.h \
++	AsyncCallList.cc \
++	AsyncCallList.h \
+ 	AsyncCallQueue.cc \
+ 	AsyncCallQueue.h \
+ 	AsyncCbdataCalls.h \
+@@ -29,6 +31,8 @@ libbase_la_SOURCES = \
+ 	CharacterSet.h \
+ 	CodeContext.cc \
+ 	CodeContext.h \
++	DelayedAsyncCalls.cc \
++	DelayedAsyncCalls.h \
+ 	EnumIterator.h \
+ 	File.cc \
+ 	File.h \
+diff --git a/src/base/forward.h b/src/base/forward.h
+index 46de97c..a5fdb4d 100644
+--- a/src/base/forward.h
++++ b/src/base/forward.h
+@@ -9,10 +9,12 @@
+ #ifndef SQUID_SRC_BASE_FORWARD_H
+ #define SQUID_SRC_BASE_FORWARD_H
+ 
++class AsyncCall;
+ class AsyncCallQueue;
+ class AsyncJob;
+ class CallDialer;
+ class CodeContext;
++class DelayedAsyncCalls;
+ class ScopedId;
+ 
+ template<class Cbc> class CbcPointer;
+@@ -21,6 +23,7 @@ template<class Job> class JobWait;
+ 
+ typedef CbcPointer<AsyncJob> AsyncJobPointer;
+ typedef RefCount<CodeContext> CodeContextPointer;
++using AsyncCallPointer = RefCount<AsyncCall>;
+ 
+ #endif /* SQUID_SRC_BASE_FORWARD_H */
+ 
+diff --git a/src/clients/Client.cc b/src/clients/Client.cc
+index 168a67f..0c4dc96 100644
+--- a/src/clients/Client.cc
++++ b/src/clients/Client.cc
+@@ -1026,6 +1026,18 @@ Client::adjustBodyBytesRead(const int64_t delta)
+     Must(bodyBytesRead >= 0);
+ }
+ 
++void
++Client::delayRead()
++{
++    Assure(!waitingForDelayAwareReadChance);
++    waitingForDelayAwareReadChance = true;
++
++    using DeferredReadDialer = NullaryMemFunT<Client>;
++    AsyncCall::Pointer call = asyncCall(11, 5, "Client::noteDelayAwareReadChance",
++            DeferredReadDialer(this, &Client::noteDelayAwareReadChance));
++    entry->mem().delayRead(call);
++}
++
+ void
+ Client::addVirginReplyBody(const char *data, ssize_t len)
+ {
+diff --git a/src/clients/Client.h b/src/clients/Client.h
+index be79b39..ecf594c 100644
+--- a/src/clients/Client.h
++++ b/src/clients/Client.h
+@@ -113,6 +113,10 @@ protected:
+     /// whether we may receive more virgin response body bytes
+     virtual bool mayReadVirginReplyBody() const = 0;
+ 
++    /// Called when a previously delayed dataConnection() read may be possible.
++    /// \sa delayRead()
++    virtual void noteDelayAwareReadChance() = 0;
++
+     /// Entry-dependent callbacks use this check to quit if the entry went bad
+     bool abortOnBadEntry(const char *abortReason);
+ 
+@@ -160,6 +164,10 @@ protected:
+ 
+     void adjustBodyBytesRead(const int64_t delta);
+ 
++    /// Defer reading until it is likely to become possible.
++    /// Eventually, noteDelayAwareReadChance() will be called.
++    void delayRead();
++
+     // These should be private
+     int64_t currentOffset = 0;  /**< Our current offset in the StoreEntry */
+     MemBuf *responseBodyBuffer = nullptr; /**< Data temporarily buffered for ICAP */
+@@ -186,6 +194,9 @@ protected:
+ #endif
+     bool receivedWholeRequestBody = false; ///< handleRequestBodyProductionEnded called
+ 
++    /// whether we are waiting for MemObject::delayRead() to call us back
++    bool waitingForDelayAwareReadChance = false;
++
+     /// whether we should not be talking to FwdState; XXX: clear fwd instead
+     /// points to a string literal which is used only for debugging
+     const char *doneWithFwd = nullptr;
+diff --git a/src/clients/FtpClient.cc b/src/clients/FtpClient.cc
+index fb30fab..5e3e789 100644
+--- a/src/clients/FtpClient.cc
++++ b/src/clients/FtpClient.cc
+@@ -10,6 +10,8 @@
+ 
+ #include "squid.h"
+ #include "acl/FilledChecklist.h"
++#include "base/AsyncJobCalls.h"
++#include "base/Range.h"
+ #include "client_side.h"
+ #include "clients/FtpClient.h"
+ #include "comm/ConnOpener.h"
+@@ -902,6 +904,15 @@ Ftp::Client::dataConnection() const
+     return data.conn;
+ }
+ 
++void
++Ftp::Client::noteDelayAwareReadChance()
++{
++    // TODO: Merge with HttpStateData::noteDelayAwareReadChance()
++    waitingForDelayAwareReadChance = false;
++    data.read_pending = false;
++    maybeReadVirginBody();
++}
++
+ void
+ Ftp::Client::maybeReadVirginBody()
+ {
+@@ -930,9 +941,16 @@ Ftp::Client::maybeReadVirginBody()
+ 
+     debugs(9,5,"queueing read on FD " << data.conn->fd);
+ 
+-    typedef CommCbMemFunT<Client, CommIoCbParams> Dialer;
+-    entry->delayAwareRead(data.conn, data.readBuf->space(), read_sz,
+-                          JobCallback(9, 5, Dialer, this, Ftp::Client::dataRead));
++    const auto amountToRead = entry->bytesWanted(Range<size_t>(0, read_sz));
++
++    if (amountToRead <= 0) {
++        delayRead();
++        return;
++    }
++
++    using ReadDialer = CommCbMemFunT<Client, CommIoCbParams>;
++    AsyncCall::Pointer readCallback = JobCallback(9, 5, ReadDialer, this, Client::dataRead);
++    comm_read(data.conn, data.readBuf->space(), amountToRead, readCallback);
+ }
+ 
+ void
+diff --git a/src/clients/FtpClient.h b/src/clients/FtpClient.h
+index 4f8c174..f61142d 100644
+--- a/src/clients/FtpClient.h
++++ b/src/clients/FtpClient.h
+@@ -186,6 +186,7 @@ protected:
+     virtual bool doneWithServer() const;
+     virtual const Comm::ConnectionPointer & dataConnection() const;
+     virtual void abortAll(const char *reason);
++    virtual void noteDelayAwareReadChance();
+ 
+     virtual Http::StatusCode failedHttpStatus(err_type &error);
+     void ctrlClosed(const CommCloseCbParams &io);
+diff --git a/src/comm.cc b/src/comm.cc
+index b18d175..052d90c 100644
+--- a/src/comm.cc
++++ b/src/comm.cc
+@@ -18,7 +18,6 @@
+ #include "comm/Read.h"
+ #include "comm/TcpAcceptor.h"
+ #include "comm/Write.h"
+-#include "CommRead.h"
+ #include "compat/cmsg.h"
+ #include "DescriptorSet.h"
+ #include "event.h"
+@@ -893,8 +892,8 @@ comm_close_complete(const FdeCbParams &params)
+  * + call read handlers with ERR_CLOSING
+  * + call closing handlers
+  *
+- * NOTE: Comm::ERR_CLOSING will NOT be called for CommReads' sitting in a
+- * DeferredReadManager.
++ * A deferred reader has no Comm read handler mentioned above. To stay in sync,
++ * such a reader must register a Comm closing handler.
+  */
+ void
+ _comm_close(int fd, char const *file, int line)
+@@ -1031,6 +1030,8 @@ comm_add_close_handler(int fd, AsyncCall::Pointer &call)
+ //    for (c = fd_table[fd].closeHandler; c; c = c->next)
+ //        assert(c->handler != handler || c->data != data);
+ 
++    // TODO: Consider enhancing AsyncCallList to support random-access close
++    // handlers, perhaps after upgrading the remaining legacy CLCB handlers.
+     call->setNext(fd_table[fd].closeHandler);
+ 
+     fd_table[fd].closeHandler = call;
+@@ -1771,149 +1772,6 @@ commHalfClosedReader(const Comm::ConnectionPointer &conn, char *, size_t size, C
+     commPlanHalfClosedCheck(); // make sure this fd will be checked again
+ }
+ 
+-CommRead::CommRead() : conn(NULL), buf(NULL), len(0), callback(NULL) {}
+-
+-CommRead::CommRead(const Comm::ConnectionPointer &c, char *buf_, int len_, AsyncCall::Pointer &callback_)
+-    : conn(c), buf(buf_), len(len_), callback(callback_) {}
+-
+-DeferredRead::DeferredRead () : theReader(NULL), theContext(NULL), theRead(), cancelled(false) {}
+-
+-DeferredRead::DeferredRead (DeferrableRead *aReader, void *data, CommRead const &aRead) : theReader(aReader), theContext (data), theRead(aRead), cancelled(false) {}
+-
+-DeferredReadManager::~DeferredReadManager()
+-{
+-    flushReads();
+-    assert (deferredReads.empty());
+-}
+-
+-/* explicit instantiation required for some systems */
+-
+-/// \cond AUTODOCS_IGNORE
+-template cbdata_type CbDataList<DeferredRead>::CBDATA_CbDataList;
+-/// \endcond
+-
+-void
+-DeferredReadManager::delayRead(DeferredRead const &aRead)
+-{
+-    debugs(5, 3, "Adding deferred read on " << aRead.theRead.conn);
+-    CbDataList<DeferredRead> *temp = deferredReads.push_back(aRead);
+-
+-    // We have to use a global function as a closer and point to temp
+-    // instead of "this" because DeferredReadManager is not a job and
+-    // is not even cbdata protected
+-    // XXX: and yet we use cbdata protection functions on it??
+-    AsyncCall::Pointer closer = commCbCall(5,4,
+-                                           "DeferredReadManager::CloseHandler",
+-                                           CommCloseCbPtrFun(&CloseHandler, temp));
+-    comm_add_close_handler(aRead.theRead.conn->fd, closer);
+-    temp->element.closer = closer; // remeber so that we can cancel
+-}
+-
+-void
+-DeferredReadManager::CloseHandler(const CommCloseCbParams &params)
+-{
+-    if (!cbdataReferenceValid(params.data))
+-        return;
+-
+-    CbDataList<DeferredRead> *temp = (CbDataList<DeferredRead> *)params.data;
+-
+-    temp->element.closer = NULL;
+-    if (temp->element.theRead.conn) {
+-        temp->element.theRead.conn->noteClosure();
+-        temp->element.theRead.conn = nullptr;
+-    }
+-    temp->element.markCancelled();
+-}
+-
+-DeferredRead
+-DeferredReadManager::popHead(CbDataListContainer<DeferredRead> &deferredReads)
+-{
+-    assert (!deferredReads.empty());
+-
+-    DeferredRead &read = deferredReads.head->element;
+-
+-    // NOTE: at this point the connection has been paused/stalled for an unknown
+-    //       amount of time. We must re-validate that it is active and usable.
+-
+-    // If the connection has been closed already. Cancel this read.
+-    if (!fd_table || !Comm::IsConnOpen(read.theRead.conn)) {
+-        if (read.closer != NULL) {
+-            read.closer->cancel("Connection closed before.");
+-            read.closer = NULL;
+-        }
+-        read.markCancelled();
+-    }
+-
+-    if (!read.cancelled) {
+-        comm_remove_close_handler(read.theRead.conn->fd, read.closer);
+-        read.closer = NULL;
+-    }
+-
+-    DeferredRead result = deferredReads.pop_front();
+-
+-    return result;
+-}
+-
+-void
+-DeferredReadManager::kickReads(int const count)
+-{
+-    /* if we had CbDataList::size() we could consolidate this and flushReads */
+-
+-    if (count < 1) {
+-        flushReads();
+-        return;
+-    }
+-
+-    size_t remaining = count;
+-
+-    while (!deferredReads.empty() && remaining) {
+-        DeferredRead aRead = popHead(deferredReads);
+-        kickARead(aRead);
+-
+-        if (!aRead.cancelled)
+-            --remaining;
+-    }
+-}
+-
+-void
+-DeferredReadManager::flushReads()
+-{
+-    CbDataListContainer<DeferredRead> reads;
+-    reads = deferredReads;
+-    deferredReads = CbDataListContainer<DeferredRead>();
+-
+-    // XXX: For fairness this SHOULD randomize the order
+-    while (!reads.empty()) {
+-        DeferredRead aRead = popHead(reads);
+-        kickARead(aRead);
+-    }
+-}
+-
+-void
+-DeferredReadManager::kickARead(DeferredRead const &aRead)
+-{
+-    if (aRead.cancelled)
+-        return;
+-
+-    // TODO: This check still allows theReader call with a closed theRead.conn.
+-    // If a delayRead() caller has a close connection handler, then such a call
+-    // would be useless and dangerous. If a delayRead() caller does not have it,
+-    // then the caller will get stuck when an external connection closure makes
+-    // aRead.cancelled (checked above) true.
+-    if (Comm::IsConnOpen(aRead.theRead.conn) && fd_table[aRead.theRead.conn->fd].closing())
+-        return;
+-
+-    debugs(5, 3, "Kicking deferred read on " << aRead.theRead.conn);
+-
+-    aRead.theReader(aRead.theContext, aRead.theRead);
+-}
+-
+-void
+-DeferredRead::markCancelled()
+-{
+-    cancelled = true;
+-}
+-
+ int
+ CommSelectEngine::checkEvents(int timeout)
+ {
+diff --git a/src/delay_pools.cc b/src/delay_pools.cc
+index 39b2e02..00abf97 100644
+--- a/src/delay_pools.cc
++++ b/src/delay_pools.cc
+@@ -71,7 +71,7 @@ private:
+         AggregateId (RefCount<Aggregate>);
+         virtual int bytesWanted (int min, int max) const;
+         virtual void bytesIn(int qty);
+-        virtual void delayRead(DeferredRead const &);
++        virtual void delayRead(const AsyncCallPointer &);
+ 
+     private:
+         RefCount<Aggregate> theAggregate;
+@@ -240,7 +240,7 @@ protected:
+ };
+ 
+ void
+-Aggregate::AggregateId::delayRead(DeferredRead const &aRead)
++Aggregate::AggregateId::delayRead(const AsyncCall::Pointer &aRead)
+ {
+     theAggregate->delayRead(aRead);
+ }
+@@ -476,7 +476,6 @@ DelayPools::InitDelayData()
+ void
+ DelayPools::FreeDelayData()
+ {
+-    eventDelete(DelayPools::Update, NULL);
+     delete[] DelayPools::delay_data;
+     pools_ = 0;
+ }
+@@ -484,7 +483,9 @@ DelayPools::FreeDelayData()
+ void
+ DelayPools::Update(void *unused)
+ {
+-    if (!pools())
++    // To prevent stuck transactions, stop updates only after no new transactions can
++    // register (because the pools were disabled) and the last registered transaction is gone.
++    if (!pools() && toUpdate.empty())
+         return;
+ 
+     eventAdd("DelayPools::Update", Update, NULL, 1.0, 1);
+diff --git a/src/http.cc b/src/http.cc
+index 8b55bf3..4fa5af0 100644
+--- a/src/http.cc
++++ b/src/http.cc
+@@ -16,6 +16,7 @@
+ #include "squid.h"
+ #include "acl/FilledChecklist.h"
+ #include "base/AsyncJobCalls.h"
++#include "base/DelayedAsyncCalls.h"
+ #include "base/TextException.h"
+ #include "base64.h"
+ #include "CachePeer.h"
+@@ -23,7 +24,6 @@
+ #include "comm/Connection.h"
+ #include "comm/Read.h"
+ #include "comm/Write.h"
+-#include "CommRead.h"
+ #include "error/Detail.h"
+ #include "errorpage.h"
+ #include "fd.h"
+@@ -1199,21 +1199,18 @@ HttpStateData::persistentConnStatus() const
+     return statusIfComplete();
+ }
+ 
+-static void
+-readDelayed(void *context, CommRead const &)
++void
++HttpStateData::noteDelayAwareReadChance()
+ {
+-    HttpStateData *state = static_cast<HttpStateData*>(context);
+-    state->flags.do_next_read = true;
+-    state->maybeReadVirginBody();
++    waitingForDelayAwareReadChance = false;
++    maybeReadVirginBody();
+ }
+ 
+ void
+ HttpStateData::readReply(const CommIoCbParams &io)
+ {
+-    Must(!flags.do_next_read); // XXX: should have been set false by mayReadVirginBody()
+-    flags.do_next_read = false;
+-
+     debugs(11, 5, io.conn);
++    waitingForCommRead = false;
+ 
+     // Bail out early on Comm::ERR_CLOSING - close handlers will tidy up for us
+     if (io.flag == Comm::ERR_CLOSING) {
+@@ -1247,9 +1244,27 @@ HttpStateData::readReply(const CommIoCbParams &io)
+     const auto readSizeWanted = readSizeMax ? entry->bytesWanted(Range<size_t>(0, readSizeMax)) : 0;
+ 
+     if (readSizeWanted <= 0) {
+-        assert(entry->mem_obj);
+-        AsyncCall::Pointer nilCall;
+-        entry->mem_obj->delayRead(DeferredRead(readDelayed, this, CommRead(io.conn, NULL, 0, nilCall)));
++        // XXX: If we avoid Comm::ReadNow(), we should not Comm::Read() again
++        // when the wait is over. We should go straight to readReply() instead.
++
++#if USE_ADAPTATION
++        // XXX: We are duplicating Client::calcBufferSpaceToReserve() logic.
++        // XXX: Some other delayRead() cases may lack kickReads() guarantees.
++        // TODO: Refactor maybeMakeSpaceAvailable() to properly treat each
++        // no-read case instead of calling delayRead() for the remaining cases.
++
++        if (responseBodyBuffer) {
++            debugs(11, 5, "avoid delayRead() to give adaptation a chance to drain overflow buffer: " << responseBodyBuffer->contentSize());
++            return; // wait for Client::noteMoreBodySpaceAvailable()
++        }
++
++        if (virginBodyDestination && !virginBodyDestination->buf().hasPotentialSpace()) {
++            debugs(11, 5, "avoid delayRead() to give adaptation a chance to drain body pipe buffer: " << virginBodyDestination->buf().contentSize());
++            return; // wait for Client::noteMoreBodySpaceAvailable()
++        }
++#endif
++
++        delayRead(); /// wait for Client::noteDelayAwareReadChance()
+         return;
+     }
+ 
+@@ -1260,7 +1275,6 @@ HttpStateData::readReply(const CommIoCbParams &io)
+     case Comm::INPROGRESS:
+         if (inBuf.isEmpty())
+             debugs(33, 2, io.conn << ": no data to process, " << xstrerr(rd.xerrno));
+-        flags.do_next_read = true;
+         maybeReadVirginBody();
+         return;
+ 
+@@ -1290,7 +1304,6 @@ HttpStateData::readReply(const CommIoCbParams &io)
+ 
+     case Comm::ENDFILE: // close detected by 0-byte read
+         eof = 1;
+-        flags.do_next_read = false;
+ 
+         /* Continue to process previously read data */
+         break;
+@@ -1301,7 +1314,6 @@ HttpStateData::readReply(const CommIoCbParams &io)
+         const auto err = new ErrorState(ERR_READ_ERROR, Http::scBadGateway, fwd->request, fwd->al);
+         err->xerrno = rd.xerrno;
+         fwd->fail(err);
+-        flags.do_next_read = false;
+         closeServer();
+         mustStop("HttpStateData::readReply");
+         return;
+@@ -1359,7 +1371,6 @@ HttpStateData::continueAfterParsingHeader()
+ 
+     if (!flags.headers_parsed && !eof) {
+         debugs(11, 9, "needs more at " << inBuf.length());
+-        flags.do_next_read = true;
+         /** \retval false If we have not finished parsing the headers and may get more data.
+          *                Schedules more reads to retrieve the missing data.
+          */
+@@ -1410,7 +1421,6 @@ HttpStateData::continueAfterParsingHeader()
+     assert(error != ERR_NONE);
+     entry->reset();
+     fwd->fail(new ErrorState(error, Http::scBadGateway, fwd->request, fwd->al));
+-    flags.do_next_read = false;
+     closeServer();
+     mustStop("HttpStateData::continueAfterParsingHeader");
+     return false; // quit on error
+@@ -1483,7 +1493,6 @@ HttpStateData::decodeAndWriteReplyBody()
+         addVirginReplyBody(decodedData.content(), decodedData.contentSize());
+         if (doneParsing) {
+             lastChunk = 1;
+-            flags.do_next_read = false;
+             markParsedVirginReplyAsWhole("http parsed last-chunk");
+         }
+         return true;
+@@ -1505,7 +1514,6 @@ void
+ HttpStateData::processReplyBody()
+ {
+     if (!flags.headers_parsed) {
+-        flags.do_next_read = true;
+         maybeReadVirginBody();
+         return;
+     }
+@@ -1525,7 +1533,6 @@ HttpStateData::processReplyBody()
+     if (entry->isAccepting()) {
+         if (flags.chunked) {
+             if (!decodeAndWriteReplyBody()) {
+-                flags.do_next_read = false;
+                 serverComplete();
+                 return;
+             }
+@@ -1551,8 +1558,6 @@ HttpStateData::processReplyBody()
+             } else {
+                 commSetConnTimeout(serverConnection, Config.Timeout.read, nil);
+             }
+-
+-            flags.do_next_read = true;
+         }
+         break;
+ 
+@@ -1562,7 +1567,6 @@ HttpStateData::processReplyBody()
+             // TODO: Remove serverConnectionSaved but preserve exception safety.
+ 
+             commUnsetConnTimeout(serverConnection);
+-            flags.do_next_read = false;
+ 
+             comm_remove_close_handler(serverConnection->fd, closeHandler);
+             closeHandler = NULL;
+@@ -1622,29 +1626,45 @@ HttpStateData::mayReadVirginReplyBody() const
+ void
+ HttpStateData::maybeReadVirginBody()
+ {
+-    // too late to read
+-    if (!Comm::IsConnOpen(serverConnection) || fd_table[serverConnection->fd].closing())
++    if (!Comm::IsConnOpen(serverConnection) || fd_table[serverConnection->fd].closing()) {
++        debugs(11, 3, "no, peer connection gone");
++        return;
++    }
++
++    if (eof) {
++        // tolerate hypothetical calls between Comm::ENDFILE and closeServer()
++        debugs(11, 3, "no, saw EOF");
+         return;
++    }
++
++    if (lastChunk) {
++        // tolerate hypothetical calls between setting lastChunk and clearing serverConnection
++        debugs(11, 3, "no, saw last-chunk");
++        return;
++    }
+ 
+     if (!canBufferMoreReplyBytes()) {
+         abortTransaction("more response bytes required, but the read buffer is full and cannot be drained");
+         return;
+     }
+ 
+-    // XXX: get rid of the do_next_read flag
+-    // check for the proper reasons preventing read(2)
+-    if (!flags.do_next_read)
++    if (waitingForDelayAwareReadChance) {
++        debugs(11, 5, "no, still waiting for noteDelayAwareReadChance()");
+         return;
++    }
+ 
+-    flags.do_next_read = false;
++    if (waitingForCommRead) {
++        debugs(11, 3, "no, already waiting for readReply()");
++        return;
++    }
+ 
+-    // must not already be waiting for read(2) ...
+     assert(!Comm::MonitorsRead(serverConnection->fd));
+ 
+     // wait for read(2) to be possible.
+     typedef CommCbMemFunT<HttpStateData, CommIoCbParams> Dialer;
+     AsyncCall::Pointer call = JobCallback(11, 5, Dialer, this, HttpStateData::readReply);
+     Comm::Read(serverConnection, call);
++    waitingForCommRead = true;
+ }
+ 
+ /// Desired inBuf capacity based on various capacity preferences/limits:
+@@ -2438,7 +2458,6 @@ HttpStateData::sendRequest()
+     AsyncCall::Pointer timeoutCall =  JobCallback(11, 5,
+                                       TimeoutDialer, this, HttpStateData::httpTimeout);
+     commSetConnTimeout(serverConnection, Config.Timeout.lifetime, timeoutCall);
+-    flags.do_next_read = true;
+     maybeReadVirginBody();
+ 
+     if (request->body_pipe != NULL) {
+diff --git a/src/http.h b/src/http.h
+index f7ed40d..6dde37a 100644
+--- a/src/http.h
++++ b/src/http.h
+@@ -78,6 +78,9 @@ public:
+     void processSurrogateControl(HttpReply *);
+ 
+ protected:
++    /* Client API */
++    virtual void noteDelayAwareReadChance();
++
+     void processReply();
+     void proceedAfter1xx();
+     void handle1xx(HttpReply *msg);
+@@ -149,6 +152,9 @@ private:
+     /// positive when we read more than we wanted
+     int64_t payloadTruncated;
+ 
++    /// whether we are waiting for our Comm::Read() handler to be called
++    bool waitingForCommRead = false;
++
+     /// Whether we received a Date header older than that of a matching
+     /// cached response.
+     bool sawDateGoBack;
+diff --git a/src/http/StateFlags.h b/src/http/StateFlags.h
+index a30de34..0798d62 100644
+--- a/src/http/StateFlags.h
++++ b/src/http/StateFlags.h
+@@ -58,7 +58,6 @@ public:
+     bool keepalive_broken = false;
+     bool abuse_detected = false;
+     bool request_sent = false;
+-    bool do_next_read = false;
+     bool chunked = false;           ///< reading a chunked response; TODO: rename
+     bool chunked_request = false;   ///< writing a chunked request
+     bool sentLastChunk = false;     ///< do not try to write last-chunk again
+diff --git a/src/mgr/Forwarder.cc b/src/mgr/Forwarder.cc
+index e4da4ca..7228625 100644
+--- a/src/mgr/Forwarder.cc
++++ b/src/mgr/Forwarder.cc
+@@ -12,6 +12,7 @@
+ #include "AccessLogEntry.h"
+ #include "base/AsyncJobCalls.h"
+ #include "base/TextException.h"
++#include "comm.h"
+ #include "comm/Connection.h"
+ #include "CommCalls.h"
+ #include "errorpage.h"
+diff --git a/src/mgr/StoreToCommWriter.cc b/src/mgr/StoreToCommWriter.cc
+index d3cf738..9f53ff0 100644
+--- a/src/mgr/StoreToCommWriter.cc
++++ b/src/mgr/StoreToCommWriter.cc
+@@ -11,6 +11,7 @@
+ #include "squid.h"
+ #include "base/AsyncCbdataCalls.h"
+ #include "base/TextException.h"
++#include "comm.h"
+ #include "comm/Connection.h"
+ #include "comm/Write.h"
+ #include "CommCalls.h"
+diff --git a/src/store.cc b/src/store.cc
+index 57eb920..ac6b194 100644
+--- a/src/store.cc
++++ b/src/store.cc
+@@ -188,44 +188,6 @@ StoreEntry::getMD5Text() const
+     return storeKeyText((const cache_key *)key);
+ }
+ 
+-#include "comm.h"
+-
+-void
+-StoreEntry::DeferReader(void *theContext, CommRead const &aRead)
+-{
+-    StoreEntry *anEntry = (StoreEntry *)theContext;
+-    anEntry->delayAwareRead(aRead.conn,
+-                            aRead.buf,
+-                            aRead.len,
+-                            aRead.callback);
+-}
+-
+-void
+-StoreEntry::delayAwareRead(const Comm::ConnectionPointer &conn, char *buf, int len, AsyncCall::Pointer callback)
+-{
+-    size_t amountToRead = bytesWanted(Range<size_t>(0, len));
+-    /* sketch: readdeferer* = getdeferer.
+-     * ->deferRead (fd, buf, len, callback, DelayAwareRead, this)
+-     */
+-
+-    if (amountToRead <= 0) {
+-        assert (mem_obj);
+-        mem_obj->delayRead(DeferredRead(DeferReader, this, CommRead(conn, buf, len, callback)));
+-        return;
+-    }
+-
+-    if (fd_table[conn->fd].closing()) {
+-        // Readers must have closing callbacks if they want to be notified. No
+-        // readers appeared to care around 2009/12/14 as they skipped reading
+-        // for other reasons. Closing may already be true at the delyaAwareRead
+-        // call time or may happen while we wait after delayRead() above.
+-        debugs(20, 3, "will not read from closing " << conn << " for " << callback);
+-        return; // the read callback will never be called
+-    }
+-
+-    comm_read(conn, buf, amountToRead, callback);
+-}
+-
+ size_t
+ StoreEntry::bytesWanted (Range<size_t> const aRange, bool ignoreDelayPools) const
+ {
+diff --git a/src/tests/stub_DelayId.cc b/src/tests/stub_DelayId.cc
+index 23942a0..5624a44 100644
+--- a/src/tests/stub_DelayId.cc
++++ b/src/tests/stub_DelayId.cc
+@@ -20,7 +20,7 @@
+ DelayId::DelayId(): pool_(0), compositeId(NULL), markedAsNoDelay(false) {}
+ DelayId::~DelayId() {}
+ 
+-void DelayId::delayRead(DeferredRead const&) STUB_NOP
++void DelayId::delayRead(const AsyncCallPointer &) STUB_NOP
+ void BandwidthBucket::refillBucket() STUB
+ bool BandwidthBucket::applyQuota(int &, Comm::IoCallback *) STUB_RETVAL(false)
+ BandwidthBucket *BandwidthBucket::SelectBucket(fde *) STUB_RETVAL(nullptr)
+diff --git a/src/tunnel.cc b/src/tunnel.cc
+index 4fc5abd..ab2e2b8 100644
+--- a/src/tunnel.cc
++++ b/src/tunnel.cc
+@@ -857,7 +857,7 @@ TunnelStateData::copyRead(Connection &from, IOCB *completion)
+     int bw = from.bytesWanted(1, SQUID_TCP_SO_RCVBUF);
+     // XXX: Delay pools must not delay client-to-Squid traffic (i.e. when
+     // from.readPendingFunc is tunnelDelayedClientRead()).
+-    // XXX: Bug #4913: Use DeferredRead instead.
++    // XXX: Bug #4913: For delay pools, use delayRead() API instead.
+     if (bw == 1 && ++from.delayedLoops < 10) {
+         from.readPending = this;
+         eventAdd("tunnelDelayedServerRead", from.readPendingFunc, from.readPending, 0.3, true);
+-- 
+2.44.0
+
+diff --git a/src/base/Makefile.in b/src/base/Makefile.in
+index a578941..18eeb6c 100644
+--- a/src/base/Makefile.in
++++ b/src/base/Makefile.in
+@@ -164,7 +164,7 @@ CONFIG_CLEAN_FILES =
+ CONFIG_CLEAN_VPATH_FILES =
+ LTLIBRARIES = $(noinst_LTLIBRARIES)
+ libbase_la_LIBADD =
+-am_libbase_la_OBJECTS = Assure.lo AsyncCall.lo AsyncCallQueue.lo AsyncJob.lo \
++am_libbase_la_OBJECTS = Assure.lo AsyncCall.lo AsyncCallQueue.lo AsyncCallList.lo DelayedAsyncCalls.lo AsyncJob.lo \
+ 	CharacterSet.lo CodeContext.lo File.lo Here.lo InstanceId.lo \
+ 	JobWait.lo RegexPattern.lo RunnersRegistry.lo TextException.lo
+ libbase_la_OBJECTS = $(am_libbase_la_OBJECTS)
+@@ -189,6 +189,7 @@ depcomp = $(SHELL) $(top_srcdir)/cfgaux/depcomp
+ am__maybe_remake_depfiles = depfiles
+ am__depfiles_remade = ./$(DEPDIR)/Assure.Plo ./$(DEPDIR)/AsyncCall.Plo \
+ 	./$(DEPDIR)/AsyncCallQueue.Plo ./$(DEPDIR)/AsyncJob.Plo \
++	./$(DEPDIR)/AsyncCallList.Plo ./$(DEPDIR)/DelayedAsyncCalls.Plo \
+ 	./$(DEPDIR)/CharacterSet.Plo ./$(DEPDIR)/CodeContext.Plo \
+ 	./$(DEPDIR)/File.Plo ./$(DEPDIR)/Here.Plo \
+ 	./$(DEPDIR)/InstanceId.Plo ./$(DEPDIR)/JobWait.Plo \
+@@ -744,6 +745,8 @@ libbase_la_SOURCES = \
+ 	AsyncCall.h \
+ 	AsyncCallQueue.cc \
+ 	AsyncCallQueue.h \
++	AsyncCallList.cc \
++	AsyncCallList.h \
+ 	AsyncCbdataCalls.h \
+ 	AsyncFunCalls.h \
+ 	AsyncJob.cc \
+@@ -756,6 +759,8 @@ libbase_la_SOURCES = \
+ 	CharacterSet.h \
+ 	CodeContext.cc \
+ 	CodeContext.h \
++	DelayedAsyncCalls.cc \
++	DelayedAsyncCalls.h \
+ 	EnumIterator.h \
+ 	File.cc \
+ 	File.h \
+@@ -850,10 +855,12 @@ distclean-compile:
+ 
+ @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/Assure.Plo@am__quote@ # am--include-marker
+ @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/AsyncCall.Plo@am__quote@ # am--include-marker
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/AsyncCallList.Plo@am__quote@ # am--include-marker
+ @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/AsyncCallQueue.Plo@am__quote@ # am--include-marker
+ @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/AsyncJob.Plo@am__quote@ # am--include-marker
+ @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/CharacterSet.Plo@am__quote@ # am--include-marker
+ @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/CodeContext.Plo@am__quote@ # am--include-marker
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/DelayedAsyncCalls.Plo@am__quote@ # am--include-marker
+ @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/File.Plo@am__quote@ # am--include-marker
+ @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/Here.Plo@am__quote@ # am--include-marker
+ @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/InstanceId.Plo@am__quote@ # am--include-marker
+@@ -1195,8 +1202,10 @@ distclean: distclean-am
+ 	-rm -f ./$(DEPDIR)/AsyncCall.Plo
+ 	-rm -f ./$(DEPDIR)/AsyncCallQueue.Plo
+ 	-rm -f ./$(DEPDIR)/AsyncJob.Plo
++	-rm -f ./$(DEPDIR)/AsyncCallList.Plo
+ 	-rm -f ./$(DEPDIR)/CharacterSet.Plo
+ 	-rm -f ./$(DEPDIR)/CodeContext.Plo
++	-rm -f ./$(DEPDIR)/DelayedAsyncCalls.Plo
+ 	-rm -f ./$(DEPDIR)/File.Plo
+ 	-rm -f ./$(DEPDIR)/Here.Plo
+ 	-rm -f ./$(DEPDIR)/InstanceId.Plo
+@@ -1251,10 +1260,12 @@ installcheck-am:
+ maintainer-clean: maintainer-clean-am
+ 		-rm -f ./$(DEPDIR)/Assure.Plo
+ 	-rm -f ./$(DEPDIR)/AsyncCall.Plo
++	-rm -f ./$(DEPDIR)/AsyncCallList.Plo
+ 	-rm -f ./$(DEPDIR)/AsyncCallQueue.Plo
+ 	-rm -f ./$(DEPDIR)/AsyncJob.Plo
+ 	-rm -f ./$(DEPDIR)/CharacterSet.Plo
+ 	-rm -f ./$(DEPDIR)/CodeContext.Plo
++	-rm -f ./$(DEPDIR)/DelayedAsyncCalls.Plo
+ 	-rm -f ./$(DEPDIR)/File.Plo
+ 	-rm -f ./$(DEPDIR)/Here.Plo
+ 	-rm -f ./$(DEPDIR)/InstanceId.Plo
+
+diff --git a/src/tests/stub_MemObject.cc b/src/tests/stub_MemObject.cc
+index dfed72c..212ddb6 100644
+--- a/src/tests/stub_MemObject.cc
++++ b/src/tests/stub_MemObject.cc
+@@ -38,7 +38,7 @@ const char *MemObject::storeId() const STUB_RETVAL(NULL)
+ const char *MemObject::logUri() const STUB_RETVAL(NULL)
+ void MemObject::setUris(char const *aStoreId, char const *aLogUri, const HttpRequestMethod &aMethod) STUB
+ void MemObject::reset() STUB
+-void MemObject::delayRead(DeferredRead const &aRead) STUB
++void MemObject::delayRead(const AsyncCallPointer &) STUB
+ bool MemObject::readAheadPolicyCanRead() const STUB_RETVAL(false)
+ void MemObject::setNoDelay(bool const newValue) STUB
+ MemObject::~MemObject() STUB
+diff --git a/src/tests/stub_comm.cc b/src/tests/stub_comm.cc
+index bf4bea6..ec68b8b 100644
+--- a/src/tests/stub_comm.cc
++++ b/src/tests/stub_comm.cc
+@@ -19,14 +19,9 @@
+ void comm_read(const Comm::ConnectionPointer &conn, char *buf, int size, IOCB *handler, void *handler_data) STUB
+ void comm_read(const Comm::ConnectionPointer &conn, char*, int, AsyncCall::Pointer &callback) STUB
+ 
+-/* should be in stub_CommRead */
+-#include "CommRead.h"
+-CommRead::CommRead(const Comm::ConnectionPointer &, char *, int, AsyncCall::Pointer &) STUB
+-CommRead::CommRead() STUB
+-DeferredReadManager::~DeferredReadManager() STUB
+-DeferredRead::DeferredRead(DeferrableRead *, void *, CommRead const &) STUB
+-void DeferredReadManager::delayRead(DeferredRead const &aRead) STUB
+-void DeferredReadManager::kickReads(int const count) STUB
++#include "base/DelayedAsyncCalls.h"
++void DelayedAsyncCalls::delay(const AsyncCall::Pointer &) STUB
++void DelayedAsyncCalls::schedule() STUB
+ 
+ #include "comm.h"
+ bool comm_iocallbackpending(void) STUB_RETVAL(false)
+diff --git a/src/tests/stub_store.cc b/src/tests/stub_store.cc
+index 634c046..f815103 100644
+--- a/src/tests/stub_store.cc
++++ b/src/tests/stub_store.cc
+@@ -64,7 +64,6 @@ bool StoreEntry::timestampsSet() STUB_RETVAL(false)
+ void StoreEntry::unregisterAbortCallback(const char *) STUB
+ void StoreEntry::destroyMemObject() STUB
+ int StoreEntry::checkTooSmall() STUB_RETVAL(0)
+-void StoreEntry::delayAwareRead(const Comm::ConnectionPointer&, char *buf, int len, AsyncCall::Pointer callback) STUB
+ void StoreEntry::setNoDelay (bool const) STUB
+ bool StoreEntry::modifiedSince(const time_t, const int) const STUB_RETVAL(false)
+ bool StoreEntry::hasIfMatchEtag(const HttpRequest &request) const STUB_RETVAL(false)
