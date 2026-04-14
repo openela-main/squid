@@ -2,7 +2,7 @@
 
 Name:     squid
 Version:  6.10
-Release:  6%{?dist}.1
+Release:  6%{?dist}.3
 Summary:  The Squid proxy caching server
 Epoch:    7
 # See CREDITS for breakdown of non GPLv2+ code
@@ -49,6 +49,10 @@ Patch208: squid-6.10-cache-peer-connect-errors.patch
 # Security patches
 # https://bugzilla.redhat.com/show_bug.cgi?id=2404736
 Patch500: squid-6.10-CVE-2025-62168.patch
+# https://bugzilla.redhat.com/show_bug.cgi?id=2451574
+Patch501: squid-6.10-CVE-2026-33526.patch
+# https://bugzilla.redhat.com/show_bug.cgi?id=2451577
+Patch502: squid-6.10-CVE-2026-32748.patch
 
 # cache_swap.sh
 Requires: bash gawk
@@ -333,6 +337,14 @@ fi
 
 
 %changelog
+* Mon Mar 30 2026 Tomas Korbar <tkorbar@redhat.com> - 7:6.10-6.3
+- Resolves: RHEL-160667 - squid: Squid: Denial of Service via
+  crafted ICP traffic (CVE-2026-32748)
+
+* Mon Mar 30 2026 Tomas Korbar <tkorbar@redhat.com> - 7:6.10-6.2
+- Resolves: RHEL-160665 - squid: Squid: Denial of Service via
+  heap Use-After-Free vulnerability in ICP handling (CVE-2026-33526)
+
 * Mon Oct 20 2025 Luboš Uhliarik <luhliari@redhat.com> - 7:6.10-6.1
 - Resolves: RHEL-122480 - CVE-2025-62168 squid: Squid vulnerable to information
   disclosure via authentication credential leakage in error handling
