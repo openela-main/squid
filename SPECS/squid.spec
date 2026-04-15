@@ -2,7 +2,7 @@
 
 Name:     squid
 Version:  4.15
-Release:  10%{?dist}.9
+Release:  10%{?dist}.11
 Summary:  The Squid proxy caching server
 Epoch:    7
 # See CREDITS for breakdown of non GPLv2+ code
@@ -80,6 +80,10 @@ Patch313: squid-4.15-ignore-wsp-after-chunk-size.patch
 Patch314: squid-4.15-CVE-2024-23638.patch
 # https://bugzilla.redhat.com/show_bug.cgi?id=2404736
 Patch315: squid-4.15-CVE-2025-62168.patch
+# https://bugzilla.redhat.com/show_bug.cgi?id=2451574
+Patch316: squid-4.15-CVE-2026-33526.patch
+# https://bugzilla.redhat.com/show_bug.cgi?id=2451577
+Patch317: squid-4.15-CVE-2026-32748.patch
 
 Requires: bash >= 2.0
 Requires(pre): shadow-utils
@@ -159,6 +163,8 @@ lookup program (dnsserver), a program for retrieving FTP data
 %patch313 -p1 -b .ignore-wsp-chunk-sz
 %patch314 -p1 -b .CVE-2024-23638
 %patch315 -p1 -b .CVE-2025-62168
+%patch316 -p1 -b .CVE-2026-33526
+%patch317 -p1 -b .CVE-2026-32748
 
 # patch305 follow-up
 %patch212 -p1 -b .fatal-read-data-from-mem
@@ -378,6 +384,16 @@ fi
 
 
 %changelog
+* Wed Apr 08 2026 Tomas Korbar <tkorbar@redhat.com> - 7:4.15-10.11
+- Fix patch for CVE-2026-32748
+- Resolves: RHEL-160675
+
+* Tue Apr 07 2026 Tomas Korbar <tkorbar@redhat.com> - 7:4.15-10.10
+- Resolves: RHEL-160675 - squid:4/squid: Squid: Denial of Service
+  via crafted ICP traffic (CVE-2026-32748)
+- Resolves: RHEL-160674 - squid:4/squid: Squid: Denial of Service
+  via heap Use-After-Free vulnerability in ICP handling (CVE-2026-33526)
+
 * Mon Oct 20 2025 Luboš Uhliarik <luhliari@redhat.com> - 7:4.15-10.9
 - Resolves: RHEL-122484 - squid: Squid vulnerable to information disclosure via
   authentication credential leakage in error handling (CVE-2025-62168)
