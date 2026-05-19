@@ -2,7 +2,7 @@
 
 Name:     squid
 Version:  6.10
-Release:  6%{?dist}.3
+Release:  12%{?dist}
 Summary:  The Squid proxy caching server
 Epoch:    7
 # See CREDITS for breakdown of non GPLv2+ code
@@ -45,6 +45,10 @@ Patch207: squid-6.10-large-upload-buffer-dies.patch
 # Upstream commit: https://github.com/squid-cache/squid/commit/2e7dea3cedd3ef2f071dee82867c4147f17376dd
 # https://issues.redhat.com/browse/RHEL-86817
 Patch208: squid-6.10-cache-peer-connect-errors.patch
+# https://issues.redhat.com/browse/RHEL-107994
+Patch209: squid-6.10-provider-keys-digest.patch
+# https://issues.redhat.com/browse/RHEL-129457
+Patch210: squid-6.10-dont-stuck-respmod.patch
 
 # Security patches
 # https://bugzilla.redhat.com/show_bug.cgi?id=2404736
@@ -337,17 +341,24 @@ fi
 
 
 %changelog
-* Mon Mar 30 2026 Tomas Korbar <tkorbar@redhat.com> - 7:6.10-6.3
-- Resolves: RHEL-160667 - squid: Squid: Denial of Service via
-  crafted ICP traffic (CVE-2026-32748)
+* Thu Mar 26 2026 Tomas Korbar <tkorbar@redhat.com> - 7:6.10-12
+- Resolves: RHEL-160669 - squid: Squid: Denial of Service via
+  crafted ICP traffic
 
-* Mon Mar 30 2026 Tomas Korbar <tkorbar@redhat.com> - 7:6.10-6.2
-- Resolves: RHEL-160665 - squid: Squid: Denial of Service via
+* Thu Mar 26 2026 Tomas Korbar <tkorbar@redhat.com> - 7:6.10-11
+- Resolves: RHEL-160668 - squid: Squid: Denial of Service via
   heap Use-After-Free vulnerability in ICP handling (CVE-2026-33526)
 
-* Mon Oct 20 2025 Luboš Uhliarik <luhliari@redhat.com> - 7:6.10-6.1
-- Resolves: RHEL-122480 - CVE-2025-62168 squid: Squid vulnerable to information
-  disclosure via authentication credential leakage in error handling
+* Thu Nov 27 2025 Luboš Uhliarik <luhliari@redhat.com> - 7:6.10-10
+- Resolves: RHEL-129457 - "ICAP_ERR_OTHER/408" occurs in icap.log when
+  downloading a file on RHEL9
+
+* Mon Nov 10 2025 Luboš Uhliarik <luhliari@redhat.com> - 7:6.10-9
+- Resolves: RHEL-122481 - squid: Squid vulnerable to information disclosure via
+  authentication credential leakage in error handling (CVE-2025-62168)
+
+* Fri Sep 12 2025 Luboš Uhliarik <luhliari@redhat.com> - 7:6.10-8
+- Resolves: RHEL-107994 - squid does not work with post-quantum crypto
 
 * Thu Apr 10 2025 Luboš Uhliarik <luhliari@redhat.com> - 7:6.10-6
 - Resolves: RHEL-86817 - ”TCP connection to XX.XX.XX.XX/XXXX failed” message is
