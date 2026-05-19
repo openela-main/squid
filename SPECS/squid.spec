@@ -2,7 +2,7 @@
 
 Name:     squid
 Version:  5.5
-Release:  22%{?dist}.4
+Release:  26%{?dist}
 Summary:  The Squid proxy caching server
 Epoch:    7
 # See CREDITS for breakdown of non GPLv2+ code
@@ -430,20 +430,20 @@ fi
 
 
 %changelog
-* Mon Mar 30 2026 Tomas Korbar <tkorbar@redhat.com> - 7:5.5-22.4
-- Resolves: RHEL-160692 - squid: Squid: Denial of Service via
+* Mon Mar 30 2026 Tomas Korbar <tkorbar@redhat.com> - 7:5.5-26
+- Resolves: RHEL-160694 - squid: Squid: Denial of Service via
   crafted ICP traffic (CVE-2026-32748)
 
-* Mon Mar 30 2026 Tomas Korbar <tkorbar@redhat.com> - 7:5.5-22.3
-- Resolves: RHEL-160693 - squid: Squid: Denial of Service via
+* Mon Mar 30 2026 Tomas Korbar <tkorbar@redhat.com> - 7:5.5-25
+- Resolves: RHEL-160695 - squid: Squid: Denial of Service via
   heap Use-After-Free vulnerability in ICP handling (CVE-2026-33526)
 
-* Thu Dec 04 2025 Luboš Uhliarik <luhliari@redhat.com> - 7:5.5-22.2
-- Resolves: RHEL-131797 - "ICAP_ERR_OTHER/408" occurs in icap.log when
+* Thu Nov 27 2025 Luboš Uhliarik <luhliari@redhat.com> - 7:5.5-24
+- Resolves: RHEL-119047 - "ICAP_ERR_OTHER/408" occurs in icap.log when
   downloading a file on RHEL9
 
-* Mon Oct 20 2025 Luboš Uhliarik <luhliari@redhat.com> - 7:5.5-22.1
-- Resolves: RHEL-122492 - squid: Squid vulnerable to information disclosure via
+* Mon Nov 10 2025 Luboš Uhliarik <luhliari@redhat.com> - 7:5.5-23
+- Resolves: RHEL-122493 - squid: Squid vulnerable to information disclosure via
   authentication credential leakage in error handling (CVE-2025-62168)
 
 * Thu Oct 02 2025 Luboš Uhliarik <luhliari@redhat.com> - 7:5.5-22
