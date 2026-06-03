@@ -2,7 +2,7 @@
 
 Name:     squid
 Version:  6.10
-Release:  12%{?dist}
+Release:  12%{?dist}.1
 Summary:  The Squid proxy caching server
 Epoch:    7
 # See CREDITS for breakdown of non GPLv2+ code
@@ -49,6 +49,8 @@ Patch208: squid-6.10-cache-peer-connect-errors.patch
 Patch209: squid-6.10-provider-keys-digest.patch
 # https://issues.redhat.com/browse/RHEL-129457
 Patch210: squid-6.10-dont-stuck-respmod.patch
+# https://redhat.atlassian.net/browse/RHEL-169992
+Patch211: squid-6.10-memleak-http-reply.patch
 
 # Security patches
 # https://bugzilla.redhat.com/show_bug.cgi?id=2404736
@@ -341,6 +343,10 @@ fi
 
 
 %changelog
+* Mon May 04 2026 Luboš Uhliarik <luhliari@redhat.com> - 7:6.10-12.1
+- Resolves: RHEL-172001 - Setting "http_reply_access" in squid.conf
+  causes a memory leak
+
 * Thu Mar 26 2026 Tomas Korbar <tkorbar@redhat.com> - 7:6.10-12
 - Resolves: RHEL-160669 - squid: Squid: Denial of Service via
   crafted ICP traffic
