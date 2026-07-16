@@ -1,0 +1,71 @@
+diff --git a/src/StoreClient.h b/src/StoreClient.h
+index 942f9fc..da97e21 100644
+--- a/src/StoreClient.h
++++ b/src/StoreClient.h
+@@ -163,12 +163,12 @@ private:
+ public:
+ 
+     struct Callback {
+-        Callback ():callback_handler(NULL), callback_data(NULL) {}
++        Callback() = default;
+ 
+         Callback (STCB *, void *);
+         bool pending() const;
+-        STCB *callback_handler;
+-        void *callback_data;
++        STCB *callback_handler = nullptr; ///< where to deliver the answer
++        CallbackData cbData; ///< the first STCB callback parameter
+         AsyncCall::Pointer notifier;
+     } _callback;
+ };
+diff --git a/src/store_client.cc b/src/store_client.cc
+index b09f78a..497ea50 100644
+--- a/src/store_client.cc
++++ b/src/store_client.cc
+@@ -127,14 +127,14 @@ store_client::finishCallback()
+     ++answers;
+ 
+     STCB *temphandler = _callback.callback_handler;
+-    void *cbdata = _callback.callback_data;
+-    _callback = Callback(nullptr, nullptr);
++    const auto cbdata = _callback.cbData.validDone();
++    _callback.~Callback();
++    new (&_callback) Callback();
+     copyInto.data = nullptr;
+ 
+-    if (cbdataReferenceValid(cbdata))
++    if (cbdata)
+         temphandler(cbdata, result);
+ 
+-    cbdataReferenceDone(cbdata);
+ }
+ 
+ store_client::store_client(StoreEntry *e) :
+@@ -194,7 +194,8 @@ store_client::copy(StoreEntry * anEntry,
+ #endif
+ 
+     assert(!_callback.pending());
+-    _callback = Callback (callback_fn, cbdataReference(data));
++    _callback.~Callback();
++    new (&_callback) Callback(callback_fn, data);
+     copyInto.data = copyRequest.data;
+     copyInto.length = copyRequest.length;
+     copyInto.offset = copyRequest.offset;
+@@ -1050,7 +1051,7 @@ store_client::dumpStats(MemBuf * output, int clientNumber) const
+     if (_callback.pending())
+         return;
+ 
+-    output->appendf("\tClient #%d, %p\n", clientNumber, _callback.callback_data);
++    output->appendf("\tClient #%d, %p\n", clientNumber, this);
+     output->appendf("\t\tcopy_offset: %" PRId64 "\n", copyInto.offset);
+     output->appendf("\t\tcopy_size: %" PRIuSIZE "\n", copyInto.length);
+     output->append("\t\tflags:", 8);
+@@ -1073,7 +1074,7 @@ store_client::Callback::pending() const
+     return callback_handler && !notifier;
+ }
+ 
+-store_client::Callback::Callback(STCB *function, void *data) : callback_handler(function), callback_data (data) {}
++store_client::Callback::Callback(STCB *function, void *data) : callback_handler(function), cbData (data) {}
+ 
+ #if USE_DELAY_POOLS
+ int

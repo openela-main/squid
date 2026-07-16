@@ -2,7 +2,7 @@
 
 Name:     squid
 Version:  4.15
-Release:  10%{?dist}.11
+Release:  10%{?dist}.12
 Summary:  The Squid proxy caching server
 Epoch:    7
 # See CREDITS for breakdown of non GPLv2+ code
@@ -44,6 +44,8 @@ Patch210: squid-4.15-halfclosed.patch
 Patch211: squid-4.15-dns-obey-ttl-set-to-zero.patch
 # https://issues.redhat.com/browse/RHEL-57030
 Patch212: squid-4.15-fatal-read-data-from-mem.patch
+# https://issues.redhat.com/browse/RHEL-50261
+Patch213: squid-4.15-store-client-leak-fix.patch
 
 # Security fixes
 # https://bugzilla.redhat.com/show_bug.cgi?id=1941506
@@ -168,6 +170,7 @@ lookup program (dnsserver), a program for retrieving FTP data
 
 # patch305 follow-up
 %patch212 -p1 -b .fatal-read-data-from-mem
+%patch213 -p1 -b .store-client-mem-leak
 
 # https://bugzilla.redhat.com/show_bug.cgi?id=1679526
 # Patch in the vendor documentation and used different location for documentation
@@ -384,6 +387,9 @@ fi
 
 
 %changelog
+* Tue Jul 14 2026 Luboš Uhliarik <luhliari@redhat.com> - 7:4.15-10.12
+- Resolves: RHEL-137799 - Squid memory usage increases until OOM.
+
 * Wed Apr 08 2026 Tomas Korbar <tkorbar@redhat.com> - 7:4.15-10.11
 - Fix patch for CVE-2026-32748
 - Resolves: RHEL-160675
