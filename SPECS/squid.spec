@@ -2,7 +2,7 @@
 
 Name:     squid
 Version:  4.15
-Release:  10%{?dist}.12
+Release:  10%{?dist}.13
 Summary:  The Squid proxy caching server
 Epoch:    7
 # See CREDITS for breakdown of non GPLv2+ code
@@ -86,6 +86,8 @@ Patch315: squid-4.15-CVE-2025-62168.patch
 Patch316: squid-4.15-CVE-2026-33526.patch
 # https://bugzilla.redhat.com/show_bug.cgi?id=2451577
 Patch317: squid-4.15-CVE-2026-32748.patch
+# https://bugzilla.redhat.com/show_bug.cgi?id=2548703
+Patch318: squid-4.15-CVE-2026-61642.patch
 
 Requires: bash >= 2.0
 Requires(pre): shadow-utils
@@ -167,6 +169,7 @@ lookup program (dnsserver), a program for retrieving FTP data
 %patch315 -p1 -b .CVE-2025-62168
 %patch316 -p1 -b .CVE-2026-33526
 %patch317 -p1 -b .CVE-2026-32748
+%patch318 -p1 -b .CVE-2026-61642
 
 # patch305 follow-up
 %patch212 -p1 -b .fatal-read-data-from-mem
@@ -387,6 +390,10 @@ fi
 
 
 %changelog
+* Fri Oct 23 2026 Luboš Uhliarik <luhliari@redhat.com>
+- Resolves: RHEL-279698 - squid:4/squid: squid: Request Smuggling in HTTP
+  Transfer-Encoding (CVE-2026-61642)
+
 * Tue Jul 14 2026 Luboš Uhliarik <luhliari@redhat.com> - 7:4.15-10.12
 - Resolves: RHEL-137799 - Squid memory usage increases until OOM.
 
