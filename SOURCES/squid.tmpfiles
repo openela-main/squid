@@ -1,0 +1,3 @@
+d /run/squid         0755 squid squid - -
+d /var/log/squid     0770 squid root  - -
+d /var/spool/squid   0750 squid squid - -

@@ -1,0 +1,534 @@
+diff --git a/src/main.cc b/src/main.cc
+index 47e1cf3..5924a6c 100644
+--- a/src/main.cc
++++ b/src/main.cc
+@@ -1585,7 +1585,6 @@ SquidMain(int argc, char **argv)
+         DiskIOModule::SetupAllModules();
+ 
+         /* we may want the parsing process to set this up in the future */
+-        Store::Init();
+         Acl::Init();
+         Auth::Init();      /* required for config parsing. NOP if !USE_AUTH */
+         Ip::ProbeTransport(); // determine IPv4 or IPv6 capabilities before parsing.
+diff --git a/src/store/Controller.cc b/src/store/Controller.cc
+index 643a1fd..d221a46 100644
+--- a/src/store/Controller.cc
++++ b/src/store/Controller.cc
+@@ -41,17 +41,11 @@ Store::Controller::Controller() :
+     assert(!store_table);
+ }
+ 
++/// this destructor is never called because Controller singleton is immortal
+ Store::Controller::~Controller()
+ {
+-    delete sharedMemStore;
+-    delete transients;
+-    delete swapDir;
+-
+-    if (store_table) {
+-        hashFreeItems(store_table, destroyStoreEntry);
+-        hashFreeMemory(store_table);
+-        store_table = nullptr;
+-    }
++    // assert at runtime because we cannot `= delete` an overridden destructor
++    assert(!"Controller is never destroyed");
+ }
+ 
+ void
+@@ -930,26 +924,10 @@ Store::Controller::checkTransients(const StoreEntry &e) const
+     assert(!transients || e.hasTransients());
+ }
+ 
+-namespace Store {
+-static RefCount<Controller> TheRoot;
+-}
+-
+ Store::Controller&
+ Store::Root()
+ {
+-    assert(TheRoot);
+-    return *TheRoot;
+-}
+-
+-void
+-Store::Init(Controller *root)
+-{
+-    TheRoot = root ? root : new Controller;
+-}
+-
+-void
+-Store::FreeMemory()
+-{
+-    TheRoot = nullptr;
++    static const auto root = new Controller();
++    return *root;
+ }
+ 
+diff --git a/src/store/Controller.h b/src/store/Controller.h
+index 2907594..880ebb5 100644
+--- a/src/store/Controller.h
++++ b/src/store/Controller.h
+@@ -23,7 +23,6 @@ class Controller: public Storage
+ {
+ public:
+     Controller();
+-    ~Controller() override;
+ 
+     /* Storage API */
+     void create() override;
+@@ -134,6 +133,8 @@ public:
+     static int store_dirs_rebuilding;
+ 
+ private:
++    ~Controller() override;
++
+     bool memoryCacheHasSpaceFor(const int pagesRequired) const;
+ 
+     void referenceBusy(StoreEntry &e);
+@@ -165,12 +166,6 @@ private:
+ /// safely access controller singleton
+ extern Controller &Root();
+ 
+-/// initialize the storage module; a custom root is used by unit tests only
+-extern void Init(Controller *root = nullptr);
+-
+-/// undo Init()
+-extern void FreeMemory();
+-
+ } // namespace Store
+ 
+ #endif /* SQUID_SRC_STORE_CONTROLLER_H */
+diff --git a/src/tests/stub_libstore.cc b/src/tests/stub_libstore.cc
+index f9c39e0..0060ea5 100644
+--- a/src/tests/stub_libstore.cc
++++ b/src/tests/stub_libstore.cc
+@@ -15,7 +15,7 @@
+ namespace Store
+ {
+ Controller::Controller() {STUB_NOP}
+-Controller::~Controller() {STUB_NOP}
++Controller::~Controller() STUB
+ void Controller::create() STUB
+ void Controller::init() STUB
+ uint64_t Controller::maxSize() const STUB_RETVAL(0)
+@@ -55,10 +55,7 @@ void Controller::memoryDisconnect(StoreEntry &) STUB
+ StoreSearch *Controller::search() STUB_RETVAL(nullptr)
+ bool Controller::SmpAware() STUB_RETVAL(false)
+ int Controller::store_dirs_rebuilding = 0;
+-Controller nil;
+-Controller &Root() STUB_RETVAL(Store::nil)
+-void Init(Controller *) STUB
+-void FreeMemory() STUB
++Controller &Root() STUB_RETREF(Controller)
+ }
+ 
+ #include "store/Disk.h"
+diff --git a/src/tests/testPackableStream.cc b/src/tests/testPackableStream.cc
+index 7f93f7a..8b8f395 100644
+--- a/src/tests/testPackableStream.cc
++++ b/src/tests/testPackableStream.cc
+@@ -30,9 +30,6 @@ void testPackableStream::setUp()
+ void
+ testPackableStream::testGetStream()
+ {
+-    /* Setup a store root so we can create a StoreEntry */
+-    Store::Init();
+-
+     CapturingStoreEntry * anEntry = new CapturingStoreEntry();
+     {
+         anEntry->lock("test");
+@@ -56,6 +53,5 @@ testPackableStream::testGetStream()
+         CPPUNIT_ASSERT_EQUAL(String("12345677.7 some text   !."), anEntry->_appended_text);
+     }
+     delete anEntry; // does the unlock()
+-    Store::FreeMemory();
+ }
+ 
+diff --git a/src/tests/testRock.cc b/src/tests/testRock.cc
+index c8742e2..3d116df 100644
+--- a/src/tests/testRock.cc
++++ b/src/tests/testRock.cc
+@@ -66,8 +66,6 @@ testRock::setUp()
+     if (Ipc::Mem::Segment::BasePath == nullptr)
+         Ipc::Mem::Segment::BasePath = ".";
+ 
+-    Store::Init();
+-
+     store = new Rock::SwapDir();
+ 
+     addSwapDir(store);
+@@ -99,8 +97,6 @@ testRock::tearDown()
+ {
+     CPPUNIT_NS::TestFixture::tearDown();
+ 
+-    Store::FreeMemory();
+-
+     store = nullptr;
+ 
+     free_cachedir(&Config.cacheSwap);
+diff --git a/src/tests/testStore.cc b/src/tests/testStore.cc
+index ce1e600..282a54c 100644
+--- a/src/tests/testStore.cc
++++ b/src/tests/testStore.cc
+@@ -16,116 +16,12 @@
+ 
+ CPPUNIT_TEST_SUITE_REGISTRATION( testStore );
+ 
+-int
+-TestStore::callback()
+-{
+-    return 1;
+-}
+-
+-StoreEntry*
+-TestStore::get(const cache_key*)
+-{
+-    return nullptr;
+-}
+-
+-void
+-TestStore::get(String, void (*)(StoreEntry*, void*), void*)
+-{}
+-
+-void
+-TestStore::init()
+-{}
+-
+-uint64_t
+-TestStore::maxSize() const
+-{
+-    return 3;
+-}
+-
+-uint64_t
+-TestStore::minSize() const
+-{
+-    return 1;
+-}
+-
+-uint64_t
+-TestStore::currentSize() const
+-{
+-    return 2;
+-}
+-
+-uint64_t
+-TestStore::currentCount() const
+-{
+-    return 2;
+-}
+-
+-int64_t
+-TestStore::maxObjectSize() const
+-{
+-    return 1;
+-}
+-
+-void
+-TestStore::getStats(StoreInfoStats &) const
+-{
+-}
+-
+-void
+-TestStore::stat(StoreEntry &) const
+-{
+-    const_cast<TestStore *>(this)->statsCalled = true;
+-}
+-
+ StoreSearch *
+ TestStore::search()
+ {
+     return nullptr;
+ }
+ 
+-void
+-testStore::testSetRoot()
+-{
+-    Store::Controller *aStore(new TestStore);
+-    Store::Init(aStore);
+-
+-    CPPUNIT_ASSERT_EQUAL(&Store::Root(), aStore);
+-    Store::FreeMemory();
+-}
+-
+-void
+-testStore::testUnsetRoot()
+-{
+-    Store::Controller *aStore(new TestStore);
+-    Store::Controller *aStore2(new TestStore);
+-    Store::Init(aStore);
+-    Store::FreeMemory();
+-    Store::Init(aStore2);
+-    CPPUNIT_ASSERT_EQUAL(&Store::Root(),aStore2);
+-    Store::FreeMemory();
+-}
+-
+-void
+-testStore::testStats()
+-{
+-    TestStore *aStore(new TestStore);
+-    Store::Init(aStore);
+-    CPPUNIT_ASSERT_EQUAL(false, aStore->statsCalled);
+-    StoreEntry entry;
+-    Store::Stats(&entry);
+-    CPPUNIT_ASSERT_EQUAL(true, aStore->statsCalled);
+-    Store::FreeMemory();
+-}
+-
+-void
+-testStore::testMaxSize()
+-{
+-    Store::Controller *aStore(new TestStore);
+-    Store::Init(aStore);
+-    CPPUNIT_ASSERT_EQUAL(static_cast<uint64_t>(3), aStore->maxSize());
+-    Store::FreeMemory();
+-}
+-
+ namespace Store {
+ 
+ /// check rawType that may be ignored
+diff --git a/src/tests/testStore.h b/src/tests/testStore.h
+index 1928f07..9f70ff5 100644
+--- a/src/tests/testStore.h
++++ b/src/tests/testStore.h
+@@ -9,9 +9,6 @@
+ #ifndef SQUID_SRC_TESTS_TESTSTORE_H
+ #define SQUID_SRC_TESTS_TESTSTORE_H
+ 
+-#include "Store.h"
+-#include "store/Controlled.h"
+-
+ #include "compat/cppunit.h"
+ 
+ /*
+@@ -21,64 +18,14 @@
+ class testStore : public CPPUNIT_NS::TestFixture
+ {
+     CPPUNIT_TEST_SUITE( testStore );
+-    CPPUNIT_TEST( testSetRoot );
+-    CPPUNIT_TEST( testUnsetRoot );
+-    CPPUNIT_TEST( testStats );
+-    CPPUNIT_TEST( testMaxSize );
+     CPPUNIT_TEST( testSwapMetaTypeClassification );
+     CPPUNIT_TEST_SUITE_END();
+ 
+ public:
+ 
+ protected:
+-    void testSetRoot();
+-    void testUnsetRoot();
+-    void testStats();
+-    void testMaxSize();
+     void testSwapMetaTypeClassification();
+ };
+ 
+-/// allows testing of methods without having all the other components live
+-class TestStore : public Store::Controller
+-{
+-
+-public:
+-    TestStore() : statsCalled (false) {}
+-
+-    bool statsCalled;
+-
+-    int callback() override;
+-
+-    virtual StoreEntry* get(const cache_key*);
+-
+-    virtual void get(String, void (*)(StoreEntry*, void*), void*);
+-
+-    void init() override;
+-
+-    void maintain() override {};
+-
+-    uint64_t maxSize() const override;
+-
+-    uint64_t minSize() const override;
+-
+-    uint64_t currentSize() const override;
+-
+-    uint64_t currentCount() const override;
+-
+-    int64_t maxObjectSize() const override;
+-
+-    void getStats(StoreInfoStats &) const override;
+-
+-    void stat(StoreEntry &) const override; /* output stats to the provided store entry */
+-
+-    virtual void reference(StoreEntry &) {} /* Reference this object */
+-
+-    virtual bool dereference(StoreEntry &) { return true; }
+-
+-    virtual StoreSearch *search();
+-};
+-
+-typedef RefCount<TestStore> TestStorePointer;
+-
+ #endif /* SQUID_SRC_TESTS_TESTSTORE_H */
+ 
+diff --git a/src/tests/testStoreController.cc b/src/tests/testStoreController.cc
+index 8bc60df..8809d2a 100644
+--- a/src/tests/testStoreController.cc
++++ b/src/tests/testStoreController.cc
+@@ -28,7 +28,6 @@ addSwapDir(TestSwapDirPointer aStore)
+ void
+ testStoreController::testStats()
+ {
+-    Store::Init();
+     StoreEntry *logEntry = new StoreEntry;
+     logEntry->createMemObject("dummy_storeId", nullptr, HttpRequestMethod());
+     logEntry->store_status = STORE_PENDING;
+@@ -42,7 +41,6 @@ testStoreController::testStats()
+     free_cachedir(&Config.cacheSwap);
+     CPPUNIT_ASSERT_EQUAL(true, aStore->statsCalled);
+     CPPUNIT_ASSERT_EQUAL(true, aStore2->statsCalled);
+-    Store::FreeMemory();
+ }
+ 
+ static void
+@@ -73,14 +71,12 @@ testStoreController::testMaxSize()
+     StoreEntry *logEntry = new StoreEntry;
+     logEntry->createMemObject("dummy_storeId", nullptr, HttpRequestMethod());
+     logEntry->store_status = STORE_PENDING;
+-    Store::Init();
+     TestSwapDirPointer aStore (new TestSwapDir);
+     TestSwapDirPointer aStore2 (new TestSwapDir);
+     addSwapDir(aStore);
+     addSwapDir(aStore2);
+     CPPUNIT_ASSERT_EQUAL(static_cast<uint64_t>(6), Store::Root().maxSize());
+     free_cachedir(&Config.cacheSwap);
+-    Store::FreeMemory();
+ }
+ 
+ static StoreEntry *
+@@ -129,7 +125,6 @@ void
+ testStoreController::testSearch()
+ {
+     commonInit();
+-    Store::Init();
+     TestSwapDirPointer aStore (new TestSwapDir);
+     TestSwapDirPointer aStore2 (new TestSwapDir);
+     addSwapDir(aStore);
+@@ -177,7 +172,5 @@ testStoreController::testSearch()
+     CPPUNIT_ASSERT_EQUAL(true, search->isDone());
+     CPPUNIT_ASSERT_EQUAL(static_cast<StoreEntry *>(nullptr), search->currentItem());
+     //CPPUNIT_ASSERT_EQUAL(false, search->next());
+-
+-    Store::FreeMemory();
+ }
+ 
+diff --git a/src/tests/testStoreHashIndex.cc b/src/tests/testStoreHashIndex.cc
+index 67e3c7f..1f10bdd 100644
+--- a/src/tests/testStoreHashIndex.cc
++++ b/src/tests/testStoreHashIndex.cc
+@@ -42,7 +42,6 @@ testStoreHashIndex::testStats()
+     free_cachedir(&Config.cacheSwap);
+     CPPUNIT_ASSERT_EQUAL(true, aStore->statsCalled);
+     CPPUNIT_ASSERT_EQUAL(true, aStore2->statsCalled);
+-    Store::FreeMemory();
+ }
+ 
+ void
+@@ -51,14 +50,12 @@ testStoreHashIndex::testMaxSize()
+     StoreEntry *logEntry = new StoreEntry;
+     logEntry->createMemObject("dummy_storeId", nullptr, HttpRequestMethod());
+     logEntry->store_status = STORE_PENDING;
+-    Store::Init();
+     TestSwapDirPointer aStore (new TestSwapDir);
+     TestSwapDirPointer aStore2 (new TestSwapDir);
+     addSwapDir(aStore);
+     addSwapDir(aStore2);
+     CPPUNIT_ASSERT_EQUAL(static_cast<uint64_t>(6), Store::Root().maxSize());
+     free_cachedir(&Config.cacheSwap);
+-    Store::FreeMemory();
+ }
+ 
+ static StoreEntry *
+@@ -129,7 +126,6 @@ void
+ testStoreHashIndex::testSearch()
+ {
+     commonInit();
+-    Store::Init();
+     TestSwapDirPointer aStore (new TestSwapDir);
+     TestSwapDirPointer aStore2 (new TestSwapDir);
+     addSwapDir(aStore);
+@@ -177,7 +173,5 @@ testStoreHashIndex::testSearch()
+     CPPUNIT_ASSERT_EQUAL(true, search->isDone());
+     CPPUNIT_ASSERT_EQUAL(static_cast<StoreEntry *>(nullptr), search->currentItem());
+     //CPPUNIT_ASSERT_EQUAL(false, search->next());
+-
+-    Store::FreeMemory();
+ }
+ 
+diff --git a/src/tests/testUfs.cc b/src/tests/testUfs.cc
+index 03fcbab..5638c5a 100644
+--- a/src/tests/testUfs.cc
++++ b/src/tests/testUfs.cc
+@@ -93,8 +93,6 @@ testUfs::testUfsSearch()
+     if (0 > system ("rm -rf " TESTDIR))
+         throw std::runtime_error("Failed to clean test work directory");
+ 
+-    Store::Init();
+-
+     MySwapDirPointer aStore (new Fs::Ufs::UFSSwapDir("ufs", "Blocking"));
+ 
+     aStore->IO = new Fs::Ufs::UFSStrategy(DiskIOModule::Find("Blocking")->createStrategy());
+@@ -196,8 +194,6 @@ testUfs::testUfsSearch()
+     CPPUNIT_ASSERT_EQUAL(true, search->isDone());
+     CPPUNIT_ASSERT_EQUAL(static_cast<StoreEntry *>(nullptr), search->currentItem());
+ 
+-    Store::FreeMemory();
+-
+     free_cachedir(&Config.cacheSwap);
+ 
+     // TODO: here we should test a dirty rebuild
+@@ -219,12 +215,6 @@ testUfs::testUfsDefaultEngine()
+     if (0 > system ("rm -rf " TESTDIR))
+         throw std::runtime_error("Failed to clean test work directory");
+ 
+-    // This assertion may fail if previous test cases fail.
+-    // Apparently, CPPUNIT_ASSERT* failure may prevent destructors of local
+-    // objects such as "StorePointer aRoot" from being called.
+-    CPPUNIT_ASSERT(!store_table); // or StoreHashIndex ctor will abort below
+-
+-    Store::Init();
+     MySwapDirPointer aStore (new Fs::Ufs::UFSSwapDir("ufs", "Blocking"));
+     addSwapDir(aStore);
+     commonInit();
+@@ -240,7 +230,6 @@ testUfs::testUfsDefaultEngine()
+     safe_free(config_line);
+     CPPUNIT_ASSERT(aStore->IO->io != nullptr);
+ 
+-    Store::FreeMemory();
+     free_cachedir(&Config.cacheSwap);
+     safe_free(Config.replPolicy->type);
+     delete Config.replPolicy;
+diff --git a/src/tests/testStore.cc b/src/tests/testStore.cc
+index 282a54c..5d199d0 100644
+--- a/src/tests/testStore.cc
++++ b/src/tests/testStore.cc
+@@ -16,12 +16,6 @@
+ 
+ CPPUNIT_TEST_SUITE_REGISTRATION( testStore );
+ 
+-StoreSearch *
+-TestStore::search()
+-{
+-    return nullptr;
+-}
+-
+ namespace Store {
+ 
+ /// check rawType that may be ignored
+diff --git a/src/tests/testStoreHashIndex.cc b/src/tests/testStoreHashIndex.cc
+index 1f10bdd..b747876 100644
+--- a/src/tests/testStoreHashIndex.cc
++++ b/src/tests/testStoreHashIndex.cc
+@@ -31,7 +31,6 @@ testStoreHashIndex::testStats()
+     StoreEntry *logEntry = new StoreEntry;
+     logEntry->createMemObject("dummy_storeId", nullptr, HttpRequestMethod());
+     logEntry->store_status = STORE_PENDING;
+-    Store::Init();
+     TestSwapDirPointer aStore (new TestSwapDir);
+     TestSwapDirPointer aStore2 (new TestSwapDir);
+     addSwapDir(aStore);

@@ -2,7 +2,7 @@
 
 Name:     squid
 Version:  6.10
-Release:  12%{?dist}.1
+Release:  15%{?dist}
 Summary:  The Squid proxy caching server
 Epoch:    7
 # See CREDITS for breakdown of non GPLv2+ code
@@ -19,6 +19,7 @@ Source6:  squid.nm
 Source7:  squid.service
 Source8:  cache_swap.sh
 Source9:  squid.sysusers
+Source10: squid.tmpfiles
 
 Source98: perl-requires-squid.sh
 
@@ -51,6 +52,9 @@ Patch209: squid-6.10-provider-keys-digest.patch
 Patch210: squid-6.10-dont-stuck-respmod.patch
 # https://redhat.atlassian.net/browse/RHEL-169992
 Patch211: squid-6.10-memleak-http-reply.patch
+# Upstream commit: https://github.com/squid-cache/squid/commit/1f50e07b88dc02c1413a87f10128d29c12937e02
+# https://redhat.atlassian.net/browse/RHEL-168094
+Patch212: squid-6.10-shutdown-root-assert.patch
 
 # Security patches
 # https://bugzilla.redhat.com/show_bug.cgi?id=2404736
@@ -218,14 +222,6 @@ mkdir -p $RPM_BUILD_ROOT%{_localstatedir}/spool/squid
 mkdir -p $RPM_BUILD_ROOT/run/squid
 chmod 644 contrib/url-normalizer.pl contrib/user-agents.pl
 
-# install /usr/lib/tmpfiles.d/squid.conf
-mkdir -p ${RPM_BUILD_ROOT}%{_tmpfilesdir}
-cat > ${RPM_BUILD_ROOT}%{_tmpfilesdir}/squid.conf <<EOF
-# See tmpfiles.d(5) for details
-
-d /run/squid 0755 squid squid - -
-EOF
-
 # Move the MIB definition to the proper place (and name)
 mkdir -p $RPM_BUILD_ROOT/usr/share/snmp/mibs
 mv $RPM_BUILD_ROOT/usr/share/squid/mib.txt $RPM_BUILD_ROOT/usr/share/snmp/mibs/SQUID-MIB.txt
@@ -238,6 +234,10 @@ rm -f $RPM_BUILD_ROOT/squid.httpd.tmp
 
 # sysusers.d
 install -p -D -m 0644 %{SOURCE9} %{buildroot}%{_sysusersdir}/squid.conf
+
+# tmpfiles.d configuration
+mkdir -p %{buildroot}%{_tmpfilesdir}
+install -m 644 -p %{SOURCE10} %{buildroot}%{_tmpfilesdir}/squid.conf
 
 %files
 %license COPYING 
@@ -343,17 +343,23 @@ fi
 
 
 %changelog
-* Mon May 04 2026 Luboš Uhliarik <luhliari@redhat.com> - 7:6.10-12.1
-- Resolves: RHEL-172001 - Setting "http_reply_access" in squid.conf
+* Thu Jun 04 2026 Luboš Uhliarik <luhliari@redhat.com> - 7:6.10-15
+- Resolves: RHEL-168094 - Squid crashes with assertion failure during shutdown
+  when cache_dir is enabled
+
+* Wed Apr 29 2026 Luboš Uhliarik <luhliari@redhat.com> - 7:6.10-14
+- Resolves: RHEL-169992 - Setting "http_reply_access" in squid.conf
   causes a memory leak
 
-* Thu Mar 26 2026 Tomas Korbar <tkorbar@redhat.com> - 7:6.10-12
-- Resolves: RHEL-160669 - squid: Squid: Denial of Service via
-  crafted ICP traffic
+* Tue Apr 28 2026 Luboš Uhliarik <luhliari@redhat.com> - 7:6.10-13
+- Resolves: RHEL-157474 - squid should use systemd-tmpfiles to create
+  directories under /var/
 
-* Thu Mar 26 2026 Tomas Korbar <tkorbar@redhat.com> - 7:6.10-11
-- Resolves: RHEL-160668 - squid: Squid: Denial of Service via
-  heap Use-After-Free vulnerability in ICP handling (CVE-2026-33526)
+* Wed Apr 22 2026 Luboš Uhliarik <luhliari@redhat.com> - 7:6.10-12
+- Resolves: RHEL-160670 - squid: Squid: Denial of Service via heap
+  Use-After-Free vulnerability in ICP handling (CVE-2026-33526)
+- Resolves: RHEL-160671 - squid: Squid: Denial of Service via crafted
+  ICP traffic (CVE-2026-32748)
 
 * Thu Nov 27 2025 Luboš Uhliarik <luhliari@redhat.com> - 7:6.10-10
 - Resolves: RHEL-129457 - "ICAP_ERR_OTHER/408" occurs in icap.log when
