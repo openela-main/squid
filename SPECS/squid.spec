@@ -2,7 +2,7 @@
 
 Name:     squid
 Version:  5.5
-Release:  26%{?dist}
+Release:  27%{?dist}
 Summary:  The Squid proxy caching server
 Epoch:    7
 # See CREDITS for breakdown of non GPLv2+ code
@@ -19,6 +19,7 @@ Source6:  squid.nm
 Source7:  squid.service
 Source8:  cache_swap.sh
 Source9:  squid.sysusers
+Source10: squid.tmpfiles
 
 Source98: perl-requires-squid.sh
 
@@ -305,14 +306,6 @@ mkdir -p $RPM_BUILD_ROOT%{_localstatedir}/spool/squid
 mkdir -p $RPM_BUILD_ROOT/run/squid
 chmod 644 contrib/url-normalizer.pl contrib/user-agents.pl
 
-# install /usr/lib/tmpfiles.d/squid.conf
-mkdir -p ${RPM_BUILD_ROOT}%{_tmpfilesdir}
-cat > ${RPM_BUILD_ROOT}%{_tmpfilesdir}/squid.conf <<EOF
-# See tmpfiles.d(5) for details
-
-d /run/squid 0755 squid squid - -
-EOF
-
 # Move the MIB definition to the proper place (and name)
 mkdir -p $RPM_BUILD_ROOT/usr/share/snmp/mibs
 mv $RPM_BUILD_ROOT/usr/share/squid/mib.txt $RPM_BUILD_ROOT/usr/share/snmp/mibs/SQUID-MIB.txt
@@ -325,6 +318,10 @@ rm -f $RPM_BUILD_ROOT/squid.httpd.tmp
 
 # sysusers.d
 install -p -D -m 0644 %{SOURCE9} %{buildroot}%{_sysusersdir}/squid.conf
+
+# tmpfiles.d configuration
+mkdir -p %{buildroot}%{_tmpfilesdir}
+install -m 644 -p %{SOURCE10} %{buildroot}%{_tmpfilesdir}/squid.conf
 
 %files
 %license COPYING 
@@ -430,13 +427,15 @@ fi
 
 
 %changelog
-* Mon Mar 30 2026 Tomas Korbar <tkorbar@redhat.com> - 7:5.5-26
-- Resolves: RHEL-160694 - squid: Squid: Denial of Service via
-  crafted ICP traffic (CVE-2026-32748)
+* Wed Apr 29 2026 Luboš Uhliarik <luhliari@redhat.com> - 7:5.5-27
+- Resolves: RHEL-167406 - squid should use systemd-tmpfiles to create
+  directories under /var/
 
-* Mon Mar 30 2026 Tomas Korbar <tkorbar@redhat.com> - 7:5.5-25
-- Resolves: RHEL-160695 - squid: Squid: Denial of Service via
-  heap Use-After-Free vulnerability in ICP handling (CVE-2026-33526)
+* Thu Apr 23 2026 Luboš Uhliarik <luhliari@redhat.com> - 7:5.5-26
+- Resolves: RHEL-160697 - squid: Squid: Denial of Service via heap
+  Use-After-Free vulnerability in ICP handling (CVE-2026-33526)
+- Resolves: RHEL-160696 - squid: Squid: Denial of Service via crafted
+  ICP traffic (CVE-2026-32748)
 
 * Thu Nov 27 2025 Luboš Uhliarik <luhliari@redhat.com> - 7:5.5-24
 - Resolves: RHEL-119047 - "ICAP_ERR_OTHER/408" occurs in icap.log when
