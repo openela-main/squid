@@ -2,7 +2,7 @@
 
 Name:     squid
 Version:  6.10
-Release:  15%{?dist}
+Release:  15%{?dist}.1
 Summary:  The Squid proxy caching server
 Epoch:    7
 # See CREDITS for breakdown of non GPLv2+ code
@@ -63,6 +63,8 @@ Patch500: squid-6.10-CVE-2025-62168.patch
 Patch501: squid-6.10-CVE-2026-33526.patch
 # https://bugzilla.redhat.com/show_bug.cgi?id=2451577
 Patch502: squid-6.10-CVE-2026-32748.patch
+# https://bugzilla.redhat.com/show_bug.cgi?id=2548703
+Patch503: squid-6.10-CVE-2026-61642.patch
 
 # cache_swap.sh
 Requires: bash gawk
@@ -343,6 +345,10 @@ fi
 
 
 %changelog
+* Thu Nov 05 2026 Luboš Uhliarik <luhliari@redhat.com> - 7:6.10-15.1
+- Resolves: RHEL-279646 - squid: squid: Request Smuggling in HTTP
+  Transfer-Encoding (CVE-2026-61642)
+
 * Thu Jun 04 2026 Luboš Uhliarik <luhliari@redhat.com> - 7:6.10-15
 - Resolves: RHEL-168094 - Squid crashes with assertion failure during shutdown
   when cache_dir is enabled
