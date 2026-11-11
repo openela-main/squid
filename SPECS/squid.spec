@@ -2,7 +2,7 @@
 
 Name:     squid
 Version:  5.5
-Release:  27%{?dist}
+Release:  27%{?dist}.1
 Summary:  The Squid proxy caching server
 Epoch:    7
 # See CREDITS for breakdown of non GPLv2+ code
@@ -102,6 +102,8 @@ Patch517: squid-5.5-CVE-2025-62168.patch
 Patch518: squid-5.5-CVE-2026-33526.patch
 # https://bugzilla.redhat.com/show_bug.cgi?id=2451577
 Patch519: squid-5.5-CVE-2026-32748.patch
+# https://bugzilla.redhat.com/show_bug.cgi?id=2548703
+Patch520: squid-5.5-CVE-2026-61642.patch
 
 # cache_swap.sh
 Requires: bash gawk
@@ -200,6 +202,7 @@ lookup program (dnsserver), a program for retrieving FTP data
 %patch517 -p1 -b .CVE-2025-62168
 %patch518 -p1 -b .CVE-2026-33526
 %patch519 -p1 -b .CVE-2026-32748
+%patch520 -p1 -b .CVE-2026-61642
 
 # patch506 follow-up
 %patch212 -p1 -b .fatal-read-data-from-mem
@@ -427,6 +430,10 @@ fi
 
 
 %changelog
+* Thu Nov 05 2026 Luboš Uhliarik <luhliari@redhat.com>- 7:5.5-27.1
+- Resolves: RHEL-279649 - squid: squid: Request Smuggling in HTTP
+  Transfer-Encoding (CVE-2026-61642)
+
 * Wed Apr 29 2026 Luboš Uhliarik <luhliari@redhat.com> - 7:5.5-27
 - Resolves: RHEL-167406 - squid should use systemd-tmpfiles to create
   directories under /var/
